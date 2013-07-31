@@ -37,10 +37,6 @@
 /* Required for definitions below */
 #include <linux/time.h>
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 /****************************************************************************
  * Basic c definitions
  */
@@ -236,6 +232,15 @@ typedef int tbs_status_t;
                                                    * RPC from the same transport
                                                    * address.
                                                    */
+#define TBS_ST_FS_FAIL          TBS_STBASE+50     /* Some db work was commited but
+                                                   * disk operations failed for
+                                                   * some reason. 
+                                                   */
+
+/* WARNING: Do not use +51 for an additional code above; it will clash with 
+ * TBS_ST_EPERM below 
+ */
+
 /* WARNING: When adding an error status you must also update TWO other files:
  *	tbs_cmsg.m
  *	tbs_errno.c
@@ -307,6 +312,23 @@ typedef int tbs_status_t;
 
 /* SyncMgr highest status code */
 #define TBS_ST_SMLIMIT                  TBS_ST_SMBASE+11
+
+/* There's no more room between TBS_STBASE and TBS_UNIXBASE.  So
+ * we need another range for additional non-UNIX-errno error codes.
+ * We'll start here.  Since sync manager is not supported anymore (and
+ * won't add new error codes), it's OK to start right at the
+ * TBS_ST_SMLIMIT value.
+ */
+
+#define TBS_STBASE_EXT TBS_ST_SMLIMIT
+/* RPC reply too large to send */
+#define TBS_ST_RPC_REPLY_TOO_BIG        TBS_STBASE_EXT
+/* ACL too large for server to send */
+#define TBS_ST_ACL_TOO_LONG_ON_SERVER   TBS_STBASE_EXT+1
+/* ACL too large for client to send */
+#define TBS_ST_ACL_TOO_LONG_FOR_RPC     TBS_STBASE_EXT+2
+
+#define TBS_STLIMIT_EXT TBS_STBASE_EXT+3
 
 /* WARNING: When adding an error status you must also update TWO other files:
  *	tbs_cmsg.m
@@ -693,9 +715,5 @@ typedef struct tbs_dirent_s {
 
 
 
-#ifdef __cplusplus
-} /* extern "C" */
 #endif
-
-#endif
-/* $Id: cabcec48.1fb911e2.96af.00:01:84:c3:8a:52 $ */
+/* $Id: 3047450d.569111e2.8db0.00:01:83:9c:f6:11 $ */

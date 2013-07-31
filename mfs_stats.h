@@ -1,4 +1,4 @@
-/* * (C) Copyright IBM Corporation 1994, 2012. */
+/* * (C) Copyright IBM Corporation 1994, 2013. */
 /*
  This program is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License as published by
@@ -248,11 +248,19 @@ struct mfs_austat {
 	MVFS_STAT_CNT_T  au_calls;	/* Audit stats */
 	MVFS_STAT_CNT_T  au_vgetattr;	/* VOB getattrs */
 	MVFS_STAT_CNT_T  au_nvgetattr;	/* Non-VOB getattrs */
-	MVFS_STAT_CNT_T  au_dupl;		/* Audit dupls eliminated */
+	MVFS_STAT_CNT_T  au_dupl;	/* Audit dupls eliminated */
 	timestruc_t  au_time;		/* time in audits so far */
 	timestruc_t  au_settime;	/* time in set_audited calls so far */
 	timestruc_t  au_ioctltime;	/* time in ioctl calls so far */
         ks_uint32_t    version;
+};
+
+#define MVFS_EACSTAT_VERS 1
+struct mvfs_eacstat {
+    MVFS_STAT_CNT_T  eac_hits;      /* EACL cache statistics */
+    MVFS_STAT_CNT_T  eac_misses;
+    MVFS_STAT_CNT_T  eac_hashcnt;
+    ks_uint32_t    version;
 };
 
 /*
@@ -286,6 +294,7 @@ extern struct mfs_acstat	mfs_acstat;
 extern struct mfs_rlstat	mfs_rlstat;
 extern struct mfs_austat	mfs_austat;
 extern struct mfs_rpchist	mfs_viewophist;
+extern struct mvfs_eacstat      mvfs_eacstat;
 
 /*
  * On Windows, with VC6 compiler, conversion from unsigned 64-bit integers
@@ -302,4 +311,4 @@ extern struct mfs_rpchist	mfs_viewophist;
 #define U2D(value) ((double)(value))
 
 #endif	/* MFS_STATS_H_ */
-/* $Id: 825f8ef2.a4e511e1.8a2b.00:01:84:c3:8a:52 $ */
+/* $Id: b349776c.5b6211e2.8064.00:01:83:9c:f6:11 $ */

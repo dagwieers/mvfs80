@@ -1,4 +1,4 @@
-/* * (C) Copyright IBM Corporation 1991, 2012. */
+/* * (C) Copyright IBM Corporation 1991, 2013. */
 /*
  This program is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License as published by
@@ -484,22 +484,24 @@ typedef struct mvfs_iovfh mvfs_iovfh_t;
  * cache invalidates. Note that symlinks are always chased.
  */
 struct mvfs_ioinval {
-    int utype; /* Invalidation type (VOB, replica, or attrcache) */
+    int utype;                  /* Inval type (VOB, replica, or attrcache) */
     UNIONIS(utype) union {
         CASEIS(MVFS_IOINVAL_VOB_OID) tbs_oid_t vob_oid;
         CASEIS(MVFS_IOINVAL_REPLICA_UUID) tbs_uuid_t replica_uuid;
     } un;
-    u_long  invaltype; /* Invalidation sub-type (nc, obj, view, vfs, elem) */
-    tbs_oid_t obj_oid; /* Object or element oid */
+    u_long invaltype;           /* Inval sub-type (nc, obj, view, vfs, elem) */
+    tbs_oid_t obj_oid;          /* Object or element oid */
     OPTIONAL mfs_strbufpn_t nm; /* Name for name cache invalidation */
 };
 typedef struct mvfs_ioinval mvfs_ioinval_t;
 
-#define MVFS_INV_NC 1 /* Invalidate name cache entry */
-#define MVFS_INV_OBJ 2 /* Invalidate cache info for obj */
-#define MVFS_INV_VIEW 3 /* Invalidate cache info for view */
-#define MVFS_INV_VFS 4 /* Invalidate cache info for vfs */
-#define MVFS_INV_ELEM 5 /* Invalidate cache info for "rmelem" and "unco" */
+#define MVFS_INV_NC      1  /* Inval name cache entry */
+#define MVFS_INV_OBJ     2  /* Inval cache info for obj */
+#define MVFS_INV_VIEW    3  /* Inval cache info for view */
+#define MVFS_INV_VFS     4  /* Inval cache info for vfs */
+#define MVFS_INV_ELEM    5  /* Inval cache info for "rmelem" and "unco" */
+#define MVFS_INV_ROLEMAP 6  /* Inval cache info for rolemap */
+#define MVFS_INV_POLICY  7  /* Inval cache info for policy */
 
 #define MVFS_IOINVAL_VOB_OID 1
 #define MVFS_IOINVAL_REPLICA_UUID 2
@@ -1189,6 +1191,7 @@ struct mvfs_statbufs {
 	OPTIONAL mfs_strbuf_t acstat;
 	OPTIONAL mfs_strbuf_t rlstat;
 	OPTIONAL mfs_strbuf_t austat;
+	OPTIONAL mfs_strbuf_t eacstat;
 	OPTIONAL mfs_strbuf_t vnopcnt;
 	OPTIONAL mfs_strbuf_t vfsopcnt;
 	OPTIONAL mfs_strbuf_t viewopcnt;
@@ -1890,4 +1893,4 @@ typedef struct mvfs_mkviewtag_info_ex mvfs_mkviewtag_info_ex_t;
 #define MVFS_CMD_MAX 62
 
 #endif /* MFSMIOCTL_H_ */
-/* $Id: 340715ac.e26e11e1.96ee.00:01:84:c3:8a:52 $ */
+/* $Id: b2997724.5b6211e2.8064.00:01:83:9c:f6:11 $ */

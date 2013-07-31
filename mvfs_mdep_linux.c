@@ -1,4 +1,4 @@
-/* * (C) Copyright IBM Corporation 1999, 2012. */
+/* * (C) Copyright IBM Corporation 1999, 2013. */
 /*
  This program is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License as published by
@@ -388,7 +388,9 @@ mvfs_linux_enter_fs(void)
 }
 
 #if defined(MVFS_DEBUG) || defined(STACK_CHECKING)
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
 typedef unsigned long int uintptr_t;    /* XXX why not available in kernel headers? */
+#endif
 EXTERN void
 mvfs_linux_exit_fs(struct mvfs_thread *thr)
 {
@@ -1438,40 +1440,42 @@ cleanup_mvfs_module(void)
  * kernel structure in many ways.  This is the conversion between the
  * two.
  */
-
 static struct rpc_stat view_rpc_stats;
 static struct rpc_stat albd_rpc_stats;
-
-#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,32)
-#define kxdreproc_t kxdrproc_t
-#define kxdrdproc_t kxdrproc_t
-#endif
-
 /*
  * The sizes listed in the RPC description should be the on-the-wire
  * encoding sizes.  That's not easy to compute, so we just make sure
  * we've got plenty of space using a similar scaling to what Linux
  * routines use.
  */
-#define RPC_REQ_BUFSZ(type) (sizeof(type##_req_t)<<2)
-#define RPC_REP_BUFSZ(type) (sizeof(type##_reply_t)<<2) 
+#define RPC_REQ_BUFSZ(type) (sizeof(type##_req_t) << 2)
+#define RPC_REP_BUFSZ(type) (sizeof(type##_reply_t) << 2) 
 
+/* The rest of this code uses the same macro to test for compatibility that we
+** use other places (for consistency), so define it here.
+*/
+#define PROVIDE_V8_COMPAT
+
+/* The xdr routines changed enough in later kernels that it doesn't make sense
+** to try to macroize the differences, so just do the full definitions here.
+*/
 #if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,32)
-#define XDR_RPC_FUNCS(type)                                             \
+
+#define XDR_RPC_ENCODE(type)                                            \
 /* return Linux error codes to RPC runtime */                           \
 STATIC void                                                             \
 mvfs_linux_xdr_encode_##type(                                           \
-void *rqstp,                                                            \
-struct xdr_stream *xdr,                                                 \
-void *obj                                                               \
+    void *rqstp,                                                        \
+    struct xdr_stream *xdr,                                             \
+    void *obj                                                           \
 )                                                                       \
 {                                                                       \
     XDR x;                                                              \
     bool_t stat;                                                        \
     x.x_op = XDR_ENCODE;                                                \
-    x.x_origdata = x.x_data = (u8 *) xdr->p;                            \
+    x.x_origdata = x.x_data = (u8 *)xdr->p;                             \
     x.x_rq = rqstp;                                                     \
-    x.x_limit = (u8 *) xdr->end;                                        \
+    x.x_limit = (u8 *)xdr->end;                                         \
     stat = xdr_##type##_req_t(&x, (type##_req_t *)obj);                 \
     MDKI_TRACE(TRACE_XDR,                                               \
                "xdr_" #type "_req: rval %d, x_data %p,"                 \
@@ -1484,28 +1488,29 @@ void *obj                                                               \
     ASSERT(x.x_data <= x.x_limit);                                      \
     xdr_adjust_iovec(xdr->iov, (u32 *)x.x_data);                        \
     xdr->buf->len += (x.x_data - x.x_origdata);                         \
-}                                                                       \
-                                                                        \
+}
+
+#define XDR_RPC_DECODE(type)                                            \
 /* return Linux error codes to RPC runtime */                           \
 STATIC int                                                              \
 mvfs_linux_xdr_decode_##type(                                           \
-void *rqstp,                                                            \
-struct xdr_stream *xdr,                                                 \
-void *obj                                                               \
+    void *rqstp,                                                        \
+    struct xdr_stream *xdr,                                             \
+    void *obj                                                           \
 )                                                                       \
 {                                                                       \
     XDR x;                                                              \
     bool_t stat;                                                        \
     x.x_op = XDR_DECODE;                                                \
-    x.x_data = x.x_origdata = (u8 *) xdr->p;                            \
+    x.x_data = x.x_origdata = (u8 *)xdr->p;                             \
     x.x_rq = rqstp;                                                     \
-    x.x_limit = (u8 *) xdr->end;                                        \
+    x.x_limit = (u8 *)xdr->end;                                         \
     stat = xdr_##type##_reply_t(&x, (type##_reply_t *)obj);             \
     MDKI_TRACE(TRACE_XDR,                                               \
                "xdr_" #type "_reply rval %d, x_data %p, x_origdata %p," \
-               " x_limit %p, obj %p, iov_base %p, rlen %x\n",           \
+               " x_limit %p, obj %p, iov_base %p\n",                    \
                stat, x.x_data, x.x_origdata, x.x_limit, obj,            \
-               xdr->iov->iov_base, rq->rq_rlen);                        \
+               xdr->iov->iov_base);                                     \
     ASSERT(x.x_data <= x.x_limit);                                      \
     if (!stat) /* failure */                                            \
         return -ERANGE /* MVFS_RPC_CANTDECODERES */;                    \
@@ -1517,7 +1522,8 @@ mvfs_linux_xdr_void(void)
 {
     return 0;
 }
-#else /* LINUX_VERSION_CODE > KERNEL_VERSION(2,6,32) */
+
+#else /* LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,32) */
 
 #ifndef rq_rlen
 #define rq_rlen rq_rcv_buf.len
@@ -1525,41 +1531,11 @@ mvfs_linux_xdr_void(void)
 #ifndef rq_rvec
 #define rq_rvec rq_rcv_buf.head
 #endif
-
-/* don't need DECL variants, we just emit the functions and let them be their
-   own prototypes. */
-#define DECL_MVFS_VIEW_XDRFUNCS(type) DECL_MVFS_TYPE_XDRFUNCS(view_##type)
-#define DECL_ALBD_VIEW_XDRFUNCS(type) DECL_MVFS_TYPE_XDRFUNCS(albd_##type)
-#define DECL_MVFS_TYPE_XDRFUNCS(type)           \
-	int mvfs_rhat_xdr_encode_##type(        \
-            struct rpc_rqst *rq,                \
-            u32 *data,                          \
-            void *obj                           \
-        );                                      \
-	int mvfs_rhat_xdr_decode_##type(        \
-            struct rpc_rqst *rq,                \
-            u32 *data,                          \
-            void *obj                           \
-        )
-
 #ifndef MAX
 #define MAX(a,b) ((a) < (b) ? (b) : (a))
 #endif
 
-/*
- * The sizes listed in the RPC description should be the on-the-wire
- * encoding sizes.  That's not easy to compute, so we just make sure
- * we've got plenty of space using a similar scaling to what Linux
- * routines use.
- */
-#define RPC_BUFSZ(type) (MAX(sizeof(type##_req_t),sizeof(type##_reply_t))<<2)
-
-/* The struct rpc_rqst changes based on kernel version, and we can't
-** test for that in the macro below, so set it up here.
-*/
-#define RPC_RQ_LIMIT (u8 *)rq->rq_svec[0].iov_base + rq->rq_snd_buf.buflen
-
-#define XDR_RPC_FUNCS(type)                                             \
+#define XDR_RPC_ENCODE(type)                                            \
 /* return Linux error codes to RPC runtime */                           \
 STATIC int                                                              \
 mvfs_linux_xdr_encode_##type(                                           \
@@ -1573,7 +1549,7 @@ mvfs_linux_xdr_encode_##type(                                           \
     x.x_op = XDR_ENCODE;                                                \
     x.x_origdata = x.x_data = (u8 *)data;                               \
     x.x_rq = rq;                                                        \
-    x.x_limit = RPC_RQ_LIMIT;                                           \
+    x.x_limit = (u8 *)rq->rq_svec[0].iov_base + rq->rq_snd_buf.buflen;  \
     stat = xdr_##type##_req_t(&x, (type##_req_t *)obj);                 \
     MDKI_TRACE(TRACE_XDR,                                               \
                "xdr_" #type "_req: rval %d, x_data %p,"                 \
@@ -1585,8 +1561,9 @@ mvfs_linux_xdr_encode_##type(                                           \
     if (!stat) /* failure */                                            \
         return -EOVERFLOW /* MVFS_RPC_CANTENCODEARGS */;                \
    return 0 /* MVFS_RPC_SUCCESS */;                                     \
-}                                                                       \
-                                                                        \
+}
+
+#define XDR_RPC_DECODE(type)                                            \
 /* return Linux error codes to RPC runtime */                           \
 STATIC int                                                              \
 mvfs_linux_xdr_decode_##type(                                           \
@@ -1622,10 +1599,23 @@ mvfs_linux_xdr_void(
 {
     return 0 /* MVFS_RPC_SUCCESS */;
 }
+
 #endif /* LINUX_VERSION_CODE > KERNEL_VERSION(2,6,32) */
 
-#define VIEW_XDR_FUNCS(type) XDR_RPC_FUNCS(view_##type)
-#define ALBD_XDR_FUNCS(type) XDR_RPC_FUNCS(albd_##type)
+#define VIEW_XDR_FUNCS(type)    \
+    XDR_RPC_ENCODE(view_##type) \
+    XDR_RPC_DECODE(view_##type)
+
+#define ALBD_XDR_FUNCS(type)    \
+    XDR_RPC_ENCODE(albd_##type) \
+    XDR_RPC_DECODE(albd_##type)
+
+#ifdef PROVIDE_V8_COMPAT
+/* We only need the reply function since the req function is the same as the new
+** rpc's.
+*/
+#define VIEW_XDR_FUNCS_V8(type) XDR_RPC_DECODE(view_##type##_v8)
+#endif
 
 /* The following macros lay down the actual entries in the
  * RPC tables used by linux.  These entries include the size of the
@@ -1638,38 +1628,52 @@ mvfs_linux_xdr_void(
  * a retry if the data received over the wire is longer than what is 
  * specified here.
  */
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,32)
+#define kxdreproc_t kxdrproc_t
+#define kxdrdproc_t kxdrproc_t
+#endif
+
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,24)
-# define MVFS_RPC_PROCINFO(proc, type) proc,    \
-    (kxdreproc_t) mvfs_linux_xdr_encode_##type,  \
-    (kxdrdproc_t) mvfs_linux_xdr_decode_##type,  \
-    RPC_BUFSZ(type),                            \
+# define MVFS_RPC_PROCINFO(proc, entype, detype)       \
+    proc,                                              \
+    (kxdreproc_t)mvfs_linux_xdr_encode_##entype,       \
+    (kxdrdproc_t)mvfs_linux_xdr_decode_##detype,       \
+    MAX(RPC_REQ_BUFSZ(entype), RPC_REP_BUFSZ(detype)), \
     0
 # define MVFS_RPC_PROCINFO_SZ(proc, type, size) \
     proc,                                       \
-    (kxdreproc_t) mvfs_linux_xdr_encode_##type,  \
-    (kxdrdproc_t) mvfs_linux_xdr_decode_##type,  \
+    (kxdreproc_t) mvfs_linux_xdr_encode_##type, \
+    (kxdrdproc_t) mvfs_linux_xdr_decode_##type, \
     (size),                                     \
     0
 #else
-# define MVFS_RPC_PROCINFO(proc, type) proc,    \
-    (kxdreproc_t) mvfs_linux_xdr_encode_##type,  \
-    (kxdrdproc_t) mvfs_linux_xdr_decode_##type,  \
-    RPC_REQ_BUFSZ(type),                        \
-    RPC_REP_BUFSZ(type),                        \
+# define MVFS_RPC_PROCINFO(proc, entype, detype) \
+    proc,                                        \
+    (kxdreproc_t)mvfs_linux_xdr_encode_##entype, \
+    (kxdrdproc_t)mvfs_linux_xdr_decode_##detype, \
+    RPC_REQ_BUFSZ(entype),                       \
+    RPC_REP_BUFSZ(detype),                       \
     0
 # define MVFS_RPC_PROCINFO_SZ(proc, type, size) \
     proc,                                       \
-    (kxdreproc_t) mvfs_linux_xdr_encode_##type,  \
-    (kxdrdproc_t) mvfs_linux_xdr_decode_##type,  \
+    (kxdreproc_t) mvfs_linux_xdr_encode_##type, \
+    (kxdrdproc_t) mvfs_linux_xdr_decode_##type, \
     (size),                                     \
     (size),                                     \
     0
 #endif
 
-#define MVFS_VIEW_PROCINFO(proc,type) MVFS_RPC_PROCINFO(VIEW_##proc,view_##type)
-#define MVFS_VIEW_PROCINFO_SZ(proc,type,size) \
-                             MVFS_RPC_PROCINFO_SZ(VIEW_##proc,view_##type,size)
-#define MVFS_ALBD_PROCINFO(proc,type) MVFS_RPC_PROCINFO(ALBD_##proc,albd_##type)
+#define MVFS_VIEW_PROCINFO(proc, type) \
+    MVFS_RPC_PROCINFO(VIEW_##proc, view_##type, view_##type)
+#define MVFS_VIEW_PROCINFO_SZ(proc, type, size) \
+    MVFS_RPC_PROCINFO_SZ(VIEW_##proc, view_##type, size)
+#define MVFS_ALBD_PROCINFO(proc, type) \
+    MVFS_RPC_PROCINFO(ALBD_##proc, albd_##type, albd_##type)
+
+#ifdef PROVIDE_V8_COMPAT
+#define MVFS_VIEW_PROCINFO_V8(proc, type) \
+    MVFS_RPC_PROCINFO(VIEW_##proc##_V8, view_##type, view_##type##_v8)
+#endif
 
 /* MFS_MAXRPCDATA is defined in mvfs_base.h which is not included by
  * mvfs_linux_fops.c so we defined a platform specific macro in mvfs_mdki.h
@@ -1683,6 +1687,7 @@ VIEW_XDR_FUNCS(change_mtype);
 VIEW_XDR_FUNCS(change_oid);
 VIEW_XDR_FUNCS(cltxt);
 VIEW_XDR_FUNCS(create);
+VIEW_XDR_FUNCS(eacl_rolemap);
 VIEW_XDR_FUNCS(getattr);
 VIEW_XDR_FUNCS(getprop);
 VIEW_XDR_FUNCS(gpath);
@@ -1700,6 +1705,28 @@ VIEW_XDR_FUNCS(rmdir);
 VIEW_XDR_FUNCS(setattr);
 VIEW_XDR_FUNCS(symlink);
 
+#ifdef PROVIDE_V8_COMPAT
+/* For V8 compatibility, the req structures are the same but the reply
+** structures are different.  So use a different macro here to define things
+** correctly so the V8 versions use the xdr req code from above but their own
+** xdr reply code.
+*/
+VIEW_XDR_FUNCS_V8(change_mtype);
+VIEW_XDR_FUNCS_V8(change_oid);
+VIEW_XDR_FUNCS_V8(create);
+VIEW_XDR_FUNCS_V8(getattr);
+VIEW_XDR_FUNCS_V8(link);
+VIEW_XDR_FUNCS_V8(lookup);
+VIEW_XDR_FUNCS_V8(mkdir);
+VIEW_XDR_FUNCS_V8(remove);
+VIEW_XDR_FUNCS_V8(rename);
+VIEW_XDR_FUNCS_V8(replica_root);
+VIEW_XDR_FUNCS_V8(revalidate);
+VIEW_XDR_FUNCS_V8(rmdir);
+VIEW_XDR_FUNCS_V8(setattr);
+VIEW_XDR_FUNCS_V8(symlink);
+#endif
+
 /* This table's order must match the view RPC order in <view_rpc_kernel.h> */
 static struct rpc_procinfo view_v4_procinfo[VIEW_NUM_PROCS] = {
     /* name, rpc-encode-func, rpc-decode-func, bufsiz, call count(?) */
@@ -1708,34 +1735,86 @@ static struct rpc_procinfo view_v4_procinfo[VIEW_NUM_PROCS] = {
      * albd XDR routines for it
      */
     {NULLPROC,
-     (kxdreproc_t) mvfs_linux_xdr_void,
-     (kxdrdproc_t) mvfs_linux_xdr_void,
+     (kxdreproc_t)mvfs_linux_xdr_void,
+     (kxdrdproc_t)mvfs_linux_xdr_void,
      8, /* just in case we need spare space */
      0},
     {/*MVFS_VIEW_PROCINFO(CONTACT, contact)*/},
     {/*MVFS_VIEW_PROCINFO(SERVER_EXIT, server_exit)*/},
-    {MVFS_VIEW_PROCINFO(SETATTR, setattr)},
-    {MVFS_VIEW_PROCINFO(CREATE, create)},
-    {MVFS_VIEW_PROCINFO(REMOVE, remove)},
-    {MVFS_VIEW_PROCINFO(RENAME, rename)},
-    {MVFS_VIEW_PROCINFO(SYMLINK, symlink)},
-    {MVFS_VIEW_PROCINFO(MKDIR, mkdir)},
-    {MVFS_VIEW_PROCINFO(RMDIR, rmdir)},
+#ifdef PROVIDE_V8_COMPAT
+    {MVFS_VIEW_PROCINFO_V8(SETATTR, setattr)},
+#else
+    {/*MVFS_VIEW_PROCINFO(VIEW_UNUSED_3, setattr)*/},
+#endif
+#ifdef PROVIDE_V8_COMPAT
+    {MVFS_VIEW_PROCINFO_V8(CREATE, create)},
+#else
+    {/*MVFS_VIEW_PROCINFO(VIEW_UNUSED_4, create)*/},
+#endif
+#ifdef PROVIDE_V8_COMPAT
+    {MVFS_VIEW_PROCINFO_V8(REMOVE, remove)},
+#else
+    {/*MVFS_VIEW_PROCINFO(VIEW_UNUSED_5, remove)*/},
+#endif
+#ifdef PROVIDE_V8_COMPAT
+    {MVFS_VIEW_PROCINFO_V8(RENAME, rename)},
+#else
+    {/*MVFS_VIEW_PROCINFO(VIEW_UNUSED_6, rename)*/},
+#endif
+#ifdef PROVIDE_V8_COMPAT
+    {MVFS_VIEW_PROCINFO_V8(SYMLINK, symlink)},
+#else
+    {/*MVFS_VIEW_PROCINFO(VIEW_UNUSED_7, symlink)*/},
+#endif
+#ifdef PROVIDE_V8_COMPAT
+    {MVFS_VIEW_PROCINFO_V8(MKDIR, mkdir)},
+#else
+    {/*MVFS_VIEW_PROCINFO(VIEW_UNUSED_8, mkdir)*/},
+#endif
+#ifdef PROVIDE_V8_COMPAT
+    {MVFS_VIEW_PROCINFO_V8(RMDIR, rmdir)},
+#else
+    {/*MVFS_VIEW_PROCINFO(VIEW_UNUSED_9, rmdir)*/},
+#endif
     {MVFS_VIEW_PROCINFO_SZ(READDIR, readdir, MVFS_LINUX_MAXRPCDATA)},
     {/*MVFS_VIEW_PROCINFO(STATFS, statfs)*/},
     {MVFS_VIEW_PROCINFO(CLTXT, cltxt)},
-    {MVFS_VIEW_PROCINFO(CHANGE_OID, change_oid)},
+#ifdef PROVIDE_V8_COMPAT
+    {MVFS_VIEW_PROCINFO_V8(CHANGE_OID, change_oid)},
+#else
+    {/*MVFS_VIEW_PROCINFO(VIEW_UNUSED_13, change_oid)*/},
+#endif
     {/*MVFS_VIEW_PROCINFO(READDIR_EXT, readdir_ext)*/},
     {MVFS_VIEW_PROCINFO(GPATH, gpath)},
-    {MVFS_VIEW_PROCINFO(REVALIDATE, revalidate)},
+#ifdef PROVIDE_V8_COMPAT
+    {MVFS_VIEW_PROCINFO_V8(REVALIDATE, revalidate)},
+#else
+    {/*MVFS_VIEW_PROCINFO(VIEW_UNUSED_16, revalidate)*/},
+#endif
     {/*MVFS_VIEW_PROCINFO(CLTXT_PNAME, cltxt_pname)*/},
-    {MVFS_VIEW_PROCINFO(CHANGE_MTYPE, change_mtype)},
+#ifdef PROVIDE_V8_COMPAT
+    {MVFS_VIEW_PROCINFO_V8(CHANGE_MTYPE, change_mtype)},
+#else
+    {/*MVFS_VIEW_PROCINFO(VIEW_UNUSED_18, change_mtype)*/},
+#endif
     {MVFS_VIEW_PROCINFO(INVALIDATE_UUID, invalidate)},
-    {MVFS_VIEW_PROCINFO(LINK, link)},
-    {MVFS_VIEW_PROCINFO(LOOKUP_V6, lookup)},
-    {MVFS_VIEW_PROCINFO(GETATTR, getattr)},
-    {MVFS_VIEW_PROCINFO(REPLICA_ROOT, replica_root)},
-    {/*MVFS_VIEW_PROCINFO(lookup_ext)*/},
+#ifdef PROVIDE_V8_COMPAT
+    {MVFS_VIEW_PROCINFO_V8(LINK, link)},
+#else
+    {/*MVFS_VIEW_PROCINFO(VIEW_UNUSED_20, link)*/},
+#endif
+    {/*MVFS_VIEW_PROCINFO(VIEW_UNUSED_21, lookup_v6)*/},
+#ifdef PROVIDE_V8_COMPAT
+    {MVFS_VIEW_PROCINFO_V8(GETATTR, getattr)},
+#else
+    {/*MVFS_VIEW_PROCINFO(VIEW_UNUSED_22, getattr)*/},
+#endif
+#ifdef PROVIDE_V8_COMPAT
+    {MVFS_VIEW_PROCINFO_V8(REPLICA_ROOT, replica_root)},
+#else
+    {/*MVFS_VIEW_PROCINFO(VIEW_UNUSED_23, replica_root)*/},
+#endif
+    {/*MVFS_VIEW_PROCINFO(VIEW_UNUSED_24, lookup_ext_v6)*/},
     {/*MVFS_VIEW_PROCINFO(create_container)*/},
     {/*MVFS_VIEW_PROCINFO(remove_container)*/},
     {/*MVFS_VIEW_PROCINFO(rename_container)*/},
@@ -1765,7 +1844,7 @@ static struct rpc_procinfo view_v4_procinfo[VIEW_NUM_PROCS] = {
     {/*MVFS_VIEW_PROCINFO(vob_rm_path_uuid)*/},
     {/*MVFS_VIEW_PROCINFO(vob_recover_object_uuid)*/},
     {/*MVFS_VIEW_PROCINFO(cr_save)*/},
-    {MVFS_VIEW_PROCINFO(GETPROP, getprop)},
+    {/*MVFS_VIEW_PROCINFO(getprop)*/},
     {/*MVFS_VIEW_PROCINFO(setprop)*/},
     {/*MVFS_VIEW_PROCINFO(lic_check)*/},
     {/*MVFS_VIEW_PROCINFO(inventory_uuids)*/},
@@ -1811,7 +1890,32 @@ static struct rpc_procinfo view_v4_procinfo[VIEW_NUM_PROCS] = {
     {/*MVFS_VIEW_PROCINFO(protect_container)*/},
     {/*MVFS_VIEW_PROCINFO(fstat_container)*/},
     {/*MVFS_VIEW_PROCINFO(ws_unload_one_object_ext)*/},
+#ifdef PROVIDE_V8_COMPAT
+    {MVFS_VIEW_PROCINFO_V8(LOOKUP, lookup)},
+#else
+    {/*MVFS_VIEW_PROCINFO(VIEW_UNUSED_100, lookup)*/},
+#endif
+    {/*MVFS_VIEW_PROCINFO(VIEW_UNUSED_101, lookup_ext)*/},
+    {/*MVFS_VIEW_PROCINFO(dos_to_unshareable)*/},
+    {/*MVFS_VIEW_PROCINFO(get_dos)*/},
+    {/*MVFS_VIEW_PROCINFO(dos_found)*/},
+    {MVFS_VIEW_PROCINFO(REPLICA_ROOT, replica_root)},
+    {MVFS_VIEW_PROCINFO(REVALIDATE, revalidate)},
     {MVFS_VIEW_PROCINFO(LOOKUP, lookup)},
+    {MVFS_VIEW_PROCINFO(GETATTR, getattr)},
+    {MVFS_VIEW_PROCINFO(SETATTR, setattr)},
+    {MVFS_VIEW_PROCINFO(CREATE, create)},
+    {MVFS_VIEW_PROCINFO(REMOVE, remove)},
+    {MVFS_VIEW_PROCINFO(MKDIR, mkdir)},
+    {MVFS_VIEW_PROCINFO(RMDIR, rmdir)},
+    {MVFS_VIEW_PROCINFO(RENAME, rename)},
+    {MVFS_VIEW_PROCINFO(LINK, link)},
+    {MVFS_VIEW_PROCINFO(SYMLINK, symlink)},
+    {MVFS_VIEW_PROCINFO(CHANGE_MTYPE, change_mtype)},
+    {MVFS_VIEW_PROCINFO(CHANGE_OID, change_oid)},
+    {MVFS_VIEW_PROCINFO_SZ(EACL_ROLEMAP, eacl_rolemap, MVFS_LINUX_MAXRPCDATA)},
+    {/*MVFS_VIEW_PROCINFO(find_oid)*/},
+    {/*MVFS_VIEW_PROCINFO(lookup_ext)*/}
 };
 
 #if VIEW_SERVER_VERS != 4
@@ -1985,7 +2089,7 @@ mvfs_linux_clntkudp_create(
                                       retrans_count, intr, cl_pp);
 }
 
-#define MVFS_XDR_INTEGRAL_TYPE_OBJ(type,objtype)                        \
+#define MVFS_XDR_INTEGRAL_TYPE_OBJ(type,objtype,cast32)                 \
 bool_t                                                                  \
 xdr_##type(                                                             \
     XDR *x,                                                             \
@@ -2007,7 +2111,7 @@ xdr_##type(                                                             \
         publicp = (u_int *)x->x_data;                                   \
         local = *publicp;                                               \
         x->x_data += sizeof(u_int);                                     \
-        *obj = (objtype)ntohl(local);                                   \
+        *obj = (objtype) cast32 ntohl(local);                           \
         return TRUE;                                                    \
       default:                                                          \
         mvfs_log(MFS_LOG_DEBUG, "xdr_" #type " called with op=%d!\n",   \
@@ -2016,15 +2120,24 @@ xdr_##type(                                                             \
     }                                                                   \
 }
 
-#define MVFS_XDR_INTEGRAL_TYPE(type) MVFS_XDR_INTEGRAL_TYPE_OBJ(type,type)
+#define MVFS_XDR_INTEGRAL_TYPE(type,cast32) MVFS_XDR_INTEGRAL_TYPE_OBJ(type,type,cast32)
 
-MVFS_XDR_INTEGRAL_TYPE(u_long)
-MVFS_XDR_INTEGRAL_TYPE(u_int)
-MVFS_XDR_INTEGRAL_TYPE(u_short)
-MVFS_XDR_INTEGRAL_TYPE(long)
-MVFS_XDR_INTEGRAL_TYPE(int)
-MVFS_XDR_INTEGRAL_TYPE_OBJ(bool,bool_t)
-MVFS_XDR_INTEGRAL_TYPE_OBJ(enum,int)
+/* For unsigned types, we don't need to cast ntohl().  It's an
+ * unsigned return value, so casting to an unsigned return type will
+ * zero-extend.  For signed types, we need to cast ntohl() to a signed
+ * value before casting to the return type, since the return-type cast
+ * will only sign-extend if the 32-bit thing is signed,
+ * i.e. (int64)ntohl() will not sign extend, but (int64)(int32)ntohl()
+ * will sign extend.
+ */
+
+MVFS_XDR_INTEGRAL_TYPE(u_long,)
+MVFS_XDR_INTEGRAL_TYPE(u_int,)
+MVFS_XDR_INTEGRAL_TYPE(u_short,)
+MVFS_XDR_INTEGRAL_TYPE(long,(int))
+MVFS_XDR_INTEGRAL_TYPE(int,(int))
+MVFS_XDR_INTEGRAL_TYPE_OBJ(bool,bool_t,)
+MVFS_XDR_INTEGRAL_TYPE_OBJ(enum,int,(int))
 
 extern bool_t
 xdr_opaque(
@@ -2334,6 +2447,7 @@ mvfs_linux_stat_zero(struct mvfs_statistics_data *sdp)
     sdp->mfs_acstat.version = MFS_ACSTAT_VERS;
     sdp->mfs_rlstat.version = MFS_RLSTAT_VERS;
     sdp->mfs_austat.version = MFS_AUSTAT_VERS;
+    sdp->mvfs_eacstat.version = MVFS_EACSTAT_VERS;
     sdp->mfs_viewophist.version = MFS_RPCHIST_VERS;
 }
 
@@ -2395,4 +2509,4 @@ mvfs_linux_prod_parent_dir_cache(
     return error;
 }
 
-static const char vnode_verid_mvfs_mdep_linux_c[] = "$Id:  d28cf0e0.1fb911e2.96af.00:01:84:c3:8a:52 $";
+static const char vnode_verid_mvfs_mdep_linux_c[] = "$Id:  55fd5d6d.690811e2.93a5.00:01:84:c3:8a:52 $";

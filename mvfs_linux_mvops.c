@@ -218,14 +218,15 @@ mvop_linux_lookupvp(
             MDKI_NAMEI_SET_MNT(myndp, MDKI_MNTGET(CVN_TO_VFSMNT(dvp)));
 	    CVN_SPINUNLOCK();
             if (d_mountpoint(MDKI_NAMEI_DENTRY(myndp))) {
-                MDKI_TRACE(TRACE_USERLOOKUP, "dvp %p, dent %p, mntpoint\n",
-                          dvp, myndp->dentry);
+                MDKI_TRACE(TRACE_USERLOOKUP, "dvp=%p, dent=%p, mntpoint\n",
+                           dvp, MDKI_NAMEI_DENTRY(myndp));
                 /* XXX not sure we should ever get here? */
                 found = ERR_PTR(-EOPNOTSUPP);
                 VNODE_DPUT(MDKI_NAMEI_DENTRY(myndp));
                 MDKI_MNTPUT(MDKI_NAMEI_MNT(myndp));
             }
-            MDKI_TRACE(TRACE_USERLOOKUP, "myndp->mnt %p\n", myndp->mnt);
+            MDKI_TRACE(TRACE_USERLOOKUP, "mydnp->mnt=%p\n",
+                       MDKI_NAMEI_MNT(myndp));
         } else {
             /* In Linux 2.6 path_lookup does all the work so found is either
             ** the found dentry or it is an error, never NULL (thus skipping
@@ -302,8 +303,9 @@ mvop_linux_lookupvp(
              */
             if (nd != myndp || error != 0) {
                 MDKI_TRACE(TRACE_DCACHE,
-                           "%s: d_put %p cnt=%d--\n",
-                           __func__, myndp->dentry, D_COUNT(myndp->dentry));
+                           "%s: d_put %p cnt=%ld--\n",
+                           __func__, MDKI_NAMEI_DENTRY(myndp),
+                           (long)D_COUNT(MDKI_NAMEI_DENTRY(myndp)));
                 MDKI_PATH_RELEASE(myndp);
                 STACK_CHECK();
             }
@@ -647,9 +649,9 @@ mvop_linux_open(
             fp->f_op = &vnode_file_file_ops;
         }
         MDKI_TRACE(TRACE_OPEN,
-                  "%s: opened realvp %p cnt %d realfp %p fcnt %d\n",
-                  __func__, *vpp, D_COUNT(CVN_TO_DENT(*vpp)),
-                  REALFILE(fp), F_COUNT(REALFILE(fp)));
+                  "%s: opened realvp %p cnt %ld realfp %p fcnt %ld\n",
+                   __func__, *vpp, (long)D_COUNT(CVN_TO_DENT(*vpp)),
+                   REALFILE(fp), (long)F_COUNT(REALFILE(fp)));
     }
 
     return status; /* already converted by mvop_linux_open_kernel() */
@@ -697,9 +699,9 @@ mvop_linux_close(
 #ifdef MVFS_DEBUG
     if (F_COUNT(fp) != count) {
         MDKI_VFS_LOG(VFS_LOG_ERR,
-                     "%s: count mismatch fpcnt=%d lccnt=%d rfpcnt=%d "
+                     "%s: count mismatch fpcnt=%ld lccnt=%d rfpcnt=%ld "
                      "(nfsd botch?)\n",
-                     __func__, F_COUNT(fp), count, F_COUNT(realfp));
+                     __func__, (long)F_COUNT(fp), count, (long)F_COUNT(realfp));
     }
 #endif
 
@@ -729,8 +731,8 @@ mvop_linux_close(
      */
     if (count == VNODE_LASTCLOSE_COUNT) { /* Really a release (last close). */
         SET_REALFILE(fp, NULL); /* "Disconnect" ctxt file from ours.  */
-        MDKI_TRACE(TRACE_CLOSE, "%s: closing realfp %p cnt %d\n",
-		   __func__, realfp, F_COUNT(realfp));
+        MDKI_TRACE(TRACE_CLOSE, "%s: closing realfp %p cnt %ld\n",
+		   __func__, realfp, (long)F_COUNT(realfp));
         status = mvop_linux_close_kernel(vp, flags, F_COUNT(realfp), off, cred,
                                          realfp, owner_id);
     } else { /* Really a flush (i.e. not the last close) */
@@ -748,8 +750,8 @@ mvop_linux_close(
     }
     STACK_CHECK();
 
-    MDKI_TRACE(TRACE_CLOSE, "%s: closed realvp %p cnt %d st=%d\n",
-	       __func__, vp, D_COUNT(CVN_TO_DENT(vp)), status);
+    MDKI_TRACE(TRACE_CLOSE, "%s: closed realvp %p cnt %ld st=%d\n",
+	       __func__, vp, (long)D_COUNT(CVN_TO_DENT(vp)), status);
 
     return status;                      /* already converted */
 }
@@ -1608,7 +1610,7 @@ mvop_linux_close_kernel(
         MDKI_VFS_LOG(VFS_LOG_ERR,
                      "%s: Locks should be gone, continuing anyway. fp=%p vp=%p "
                      "cnt=%d fcnt=%ld po=%p pid=%d tgid=%d fl=%p flo=%p\n",
-                     __func__, fp, vp, count, (long) F_COUNT(fp),
+                     __func__, fp, vp, count, (long)F_COUNT(fp),
                      current->files, current->pid, current->tgid,
                      fp->f_dentry->d_inode->i_flock->fl_file,
                      fp->f_dentry->d_inode->i_flock->fl_owner);
@@ -3158,4 +3160,4 @@ VFS_T vnlayer_cltxt_vfs = {
     .vfs_op =     &vnlayer_linux_cltxt_vfsop
     /* initialize vfs_sb at runtime */
 };
-static const char vnode_verid_mvfs_linux_mvops_c[] = "$Id:  50d4841d.4af711e2.9f5c.44:37:e6:71:2b:ed $";
+static const char vnode_verid_mvfs_linux_mvops_c[] = "$Id:  97f0154b.4b8111e2.85f7.44:37:e6:71:2b:ed $";

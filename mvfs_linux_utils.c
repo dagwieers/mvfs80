@@ -899,10 +899,18 @@ vnlayer_debug_mntget(
     if ((vnlayer_debug_mnt != NULL && mnt == vnlayer_debug_mnt) ||
         (mdki_tracing & TRACE_VFSMNT) != 0)
     {
+#if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,32)
+#ifdef CONFIG_SMP
+        int cnt = atomic_read(&mnt->mnt_longterm);
+#else
+        int cnt = mnt->mnt_count;
+#endif
+#else
         int cnt = atomic_read(&mnt->mnt_count);
-        MDKI_VFS_LOG(VFS_LOG_DEBUG,"VFSMNT: mntget(%p) %d->%d from %p (%s:%s:%d)\n",
-                     mnt, cnt, cnt+1, mdki_getmycaller(),
-                     file, func, line);
+#endif
+        MDKI_VFS_LOG(VFS_LOG_DEBUG,
+                     "VFSMNT: mntget(%p) %d->%d from %p (%s:%s:%d)\n",
+                     mnt, cnt, cnt + 1, mdki_getmycaller(), file, func, line);
     }
     return(mntget(mnt));
 }
@@ -919,10 +927,18 @@ vnlayer_debug_mntput(
         ((vnlayer_debug_mnt != NULL && mnt == vnlayer_debug_mnt) ||
          (mdki_tracing & TRACE_VFSMNT) != 0))
     {
+#if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,32)
+#ifdef CONFIG_SMP
+        int cnt = atomic_read(&mnt->mnt_longterm);
+#else
+        int cnt = (int)(mnt->mnt_count);
+#endif
+#else
         int cnt = atomic_read(&mnt->mnt_count);
-        MDKI_VFS_LOG(VFS_LOG_DEBUG,"VFSMNT: mntput(%p) %d->%d from %p (%s:%s:%d)\n",
-                     mnt, cnt, cnt-1, mdki_getmycaller(),
-                     file, func, line);
+#endif
+        MDKI_VFS_LOG(VFS_LOG_DEBUG,
+                     "VFSMNT: mntput(%p) %d->%d from %p (%s:%s:%d)\n",
+                     mnt, cnt, cnt - 1, mdki_getmycaller(), file, func, line);
     }
     mntput(mnt);
 }
@@ -1268,4 +1284,4 @@ mdki_vsnprintf(
 {
     return vsnprintf(str, limit, fmt, ap);
 }
-static const char vnode_verid_mvfs_linux_utils_c[] = "$Id:  8b08d593.f76811e1.86e2.00:01:84:c3:8a:52 $";
+static const char vnode_verid_mvfs_linux_utils_c[] = "$Id:  1499f497.0c1f11e2.93ec.00:01:83:9c:f6:11 $";

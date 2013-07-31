@@ -744,10 +744,10 @@ sohash_find_entry(
     void           *arg_verify_callback
 )
 {
-    sohash_hazard_ref_t *myhp;
-    SOHASH_HASHINDEX_T hashindex;
-    sohash_entry_t *ret;
-    SOHASH_REVERSE_KEY_T reverse_so_key;
+    sohash_hazard_ref_t *myhp = NULL;
+    SOHASH_HASHINDEX_T hashindex = 0;
+    sohash_entry_t *ret = NULL;
+    SOHASH_REVERSE_KEY_T reverse_so_key = 0;
     sohash_entry_t **bucket = NULL;
 
     ASSERT(hashd != NULL);
@@ -1947,7 +1947,7 @@ sohash_set_bucket(
                      "allocated segment failed. hashd 0x%x segment index %u, "
                      "allocated segment 0x%x existing segment 0x%x\n", hashd, 
                      segment_index, new_segment, 
-                     ATOMIC_PTR_READ(&hashd->hashtable[segment_index])));
+                     MDKI_ATOMIC_PTR_READ(&hashd->hashtable[segment_index])));
             KMEM_FREE(new_segment, len);
         }
     }
@@ -2002,4 +2002,4 @@ sohash_set_bucket(
     return(0);
 }
 
-static const char vnode_verid_mvfs_sohash_table_c[] = "$Id:  922a776b.ec6711e1.906d.00:01:84:c3:8a:52 $";
+static const char vnode_verid_mvfs_sohash_table_c[] = "$Id:  0329eedf.0c1f11e2.93ec.00:01:83:9c:f6:11 $";

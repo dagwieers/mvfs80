@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2003, 2011 IBM Corporation.
+# Copyright (C) 2003, 2013 IBM Corporation.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -126,8 +126,11 @@ MVFS_OBJECTS= \
 	mvfs_kmem.o \
 	mvfs_copy.o \
 	mvfs_transtype.o \
+	mvfs_acl.o \
 	xdr_tbs_kernel.o \
 	xdr_view_kernel.o \
+	tbs_acl_c_xdr_kernel.o \
+	tbs_acl_kernel.o \
 	tbs_errno.o \
 	xdr_albd_kernel.o \
 	xdr_ks_kernel.o \
@@ -153,9 +156,8 @@ MVFS_DEFS= \
 	-DATRIA_UNIX \
 	-DI18N_MSGS \
 	-DLINUX \
-	-DXREV_CLIENTS_SUPPORT_V6_SERVERS \
-	-DXREV_SERVERS_SUPPORT_V5_CLIENTS \
-	-DXREV_SERVERS_SUPPORT_V6_CLIENTS \
+	-DXREV_CLIENTS_SUPPORT_V8_SERVERS \
+	-DXREV_CLIENTS_SUPPORT_V7_SERVERS \
 	-D_LARGEFILE64_SOURCE
 
 WARNING_FLAGS = -Wall -Wstrict-prototypes -Wunused -Werror 
@@ -244,4 +246,4 @@ clean: cleano
 
 cleano:
 	-rm -rf *.o *.kobj *.obj *.ko *.mod.? .*.cmd .tmp_versions
-# $Id: 91f63ec0.c4c011e0.9754.00:01:83:9c:f6:11 $ 
+# $Id: b7d97964.5b6211e2.8064.00:01:83:9c:f6:11 $ 

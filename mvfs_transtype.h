@@ -1,4 +1,4 @@
-/* * (C) Copyright IBM Corporation 1998, 2010. */
+/* * (C) Copyright IBM Corporation 1998, 2013. */
 /*
  This program is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License as published by
@@ -390,6 +390,8 @@ struct view_vstat_32 {
     struct tbs_oid_s_32 elem_oid;
     struct tbs_oid_s_32 obj_oid;
     struct timeval_32 event_time;
+    struct tbs_oid_s_32 rolemap_oid;
+    struct timeval_32 eacl_mtime;
 };
 
 struct mvfs_xstat_32 {
@@ -427,6 +429,7 @@ struct mvfs_statbufs_32 {
     struct mfs_strbuf_32 acstat;
     struct mfs_strbuf_32 rlstat;
     struct mfs_strbuf_32 austat;
+    struct mfs_strbuf_32 eacstat;
     struct mfs_strbuf_32 vnopcnt;
     struct mfs_strbuf_32 vfsopcnt;
     struct mfs_strbuf_32 viewopcnt;
@@ -607,4 +610,4 @@ extern void mvfs_vobinfo_to_mvfs_vobinfo_32(struct mvfs_vobinfo *vbl, struct mvf
 #endif /* ATRIA_LP64 || ATRIA_LLP64 */
 
 #endif /* MVFS_TRANSTYPE_H_ */
-/* $Id: 3da95f6c.a98711df.9145.00:01:84:c3:8b:ce $ */
+/* $Id: b45977e4.5b6211e2.8064.00:01:83:9c:f6:11 $ */

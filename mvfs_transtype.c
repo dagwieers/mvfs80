@@ -1,4 +1,4 @@
-/* * (C) Copyright IBM Corporation 1998, 2010. */
+/* * (C) Copyright IBM Corporation 1998, 2013. */
 /*
  This program is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License as published by
@@ -812,12 +812,13 @@ tbs_fstat_db_s_to_tbs_fstat_db_s_32(struct tbs_fstat_db_s *vbl, struct tbs_fstat
 void
 view_vstat_to_view_vstat_32(struct view_vstat *vbl, struct view_vstat_32 *vbl_32)
 {
-	tbs_fstat_db_s_to_tbs_fstat_db_s_32(&vbl->fstat, &vbl_32->fstat);
-	vbl_32->mtype = vbl->mtype;
-	tbs_oid_s_to_tbs_oid_s_32(&vbl->elem_oid, &vbl_32->elem_oid);
-	tbs_oid_s_to_tbs_oid_s_32(&vbl->obj_oid, &vbl_32->obj_oid);
-	mvfs_timeval_to_mvfs_timeval_32(&vbl->event_time, &vbl_32->event_time);
-    
+        tbs_fstat_db_s_to_tbs_fstat_db_s_32(&vbl->fstat, &vbl_32->fstat);
+        vbl_32->mtype = vbl->mtype;
+        tbs_oid_s_to_tbs_oid_s_32(&vbl->elem_oid, &vbl_32->elem_oid);
+        tbs_oid_s_to_tbs_oid_s_32(&vbl->obj_oid, &vbl_32->obj_oid);
+        mvfs_timeval_to_mvfs_timeval_32(&vbl->event_time, &vbl_32->event_time);
+        tbs_oid_s_to_tbs_oid_s_32(&vbl->rolemap_oid, &vbl_32->rolemap_oid);
+        mvfs_timeval_to_mvfs_timeval_32(&vbl->eacl_mtime, &vbl_32->eacl_mtime);
 }
 
 void
@@ -912,6 +913,7 @@ mvfs_statbufs_32_to_mvfs_statbufs(struct mvfs_statbufs_32 *vbl_32, struct mvfs_s
 	mfs_strbuf_32_to_mfs_strbuf(&vbl_32->acstat, &vbl->acstat);
 	mfs_strbuf_32_to_mfs_strbuf(&vbl_32->rlstat, &vbl->rlstat);
 	mfs_strbuf_32_to_mfs_strbuf(&vbl_32->austat, &vbl->austat);
+	mfs_strbuf_32_to_mfs_strbuf(&vbl_32->eacstat, &vbl->eacstat);
 	mfs_strbuf_32_to_mfs_strbuf(&vbl_32->vnopcnt, &vbl->vnopcnt);
 	mfs_strbuf_32_to_mfs_strbuf(&vbl_32->vfsopcnt, &vbl->vfsopcnt);
 	mfs_strbuf_32_to_mfs_strbuf(&vbl_32->viewopcnt, &vbl->viewopcnt);
@@ -1097,4 +1099,4 @@ mvfs_gfsinfo_32_to_mvfs_gfsinfo(struct mvfs_gfsinfo_32 *gfsinfo_32, struct mvfs_
 }
 
 #endif /* ATRIA_LP64 || ATRIA_LLP64 */
-static const char vnode_verid_mvfs_transtype_c[] = "$Id:  3e495f84.a98711df.9145.00:01:84:c3:8b:ce $";
+static const char vnode_verid_mvfs_transtype_c[] = "$Id:  b49977fc.5b6211e2.8064.00:01:83:9c:f6:11 $";

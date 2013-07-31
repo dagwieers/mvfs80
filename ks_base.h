@@ -1,4 +1,4 @@
-/* * (C) Copyright IBM Corporation 1990, 2009. */
+/* * (C) Copyright IBM Corporation 1990, 2013. */
 /*
  This program is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License as published by
@@ -37,15 +37,9 @@
 
 /* ANSI C implies function prototypes (but not necessarily vice versa) */
 
-#if defined(__cplusplus) && !defined(RPC)
-#define ATRIA_EXTERN_C_BEGIN extern "C" {
-#define ATRIA_EXTERN_C_END }
-#define ATRIA_EXTERN_C extern "C"
-#else
 #define ATRIA_EXTERN_C_BEGIN
 #define ATRIA_EXTERN_C_END
 #define ATRIA_EXTERN_C
-#endif
 
 /****************************************************************************
  * System includes
@@ -70,6 +64,18 @@
 #define mnt_fstype      mnt_type
 #define MNTTAB_T struct mntent
 #define MNT_LINE_MAX 1024
+
+/* all others use native dirent */
+#define ks_readdir readdir
+#define ks_telldir telldir
+#define ks_seekdir seekdir
+#define ks_rewinddir rewinddir
+#define ks_closedir closedir
+#define ks_opendir opendir
+#define KS_DIR DIR
+#define ks_dirent dirent
+#define ks_scandir scandir
+#define ks_alphasort alphasort
 
 /****************************************************************************
  * Sockets are file descriptors on Unix and something else on Windows.  Use
@@ -261,6 +267,24 @@ typedef ks_int64_t ks_off64_t;
 #else
 #error "ks_base.h: size of timeval unknown"
 #endif  /* ATRIA_TIMEVAL_T_LONG */
+
+/* Some common timeval manipulation routines that everyone can share (e.g. MVFS)
+** without including <date.h> (which inclues too much).
+*/
+/****************************************************************************
+ * DATE_TIMEVALCMP
+ * Compare two timevals.
+ * IN   time1		first time (struct timeval *)
+ * IN   time2		second time (struct timeval *)
+ * RESULT:		1 if time1 is after time2
+ *			-1 if time1 is before time2
+ *			0 if times are the same
+ */
+#define DATE_TIMEVALCMP(time1, time2) \
+    ( (((u_long)(time1)->tv_sec) < ((u_long)(time2)->tv_sec)) ? -1 : \
+     ( (((u_long)(time1)->tv_sec) > ((u_long)(time2)->tv_sec)) ? 1 : \
+      ( ((time1)->tv_usec < (time2)->tv_usec) ? -1 : \
+       ( ((time1)->tv_usec > (time2)->tv_usec) ? 1 : 0 ) ) ) )
 
 /*
  * These formats currently the same on all platforms.  
@@ -590,18 +614,10 @@ typedef char credutl_sid_str_t[CREDUTL_MAX_SID_STR + 1];
 #define CREDUTL_SID_IS_NOBODY(sid)   ((sid)->type == CREDUTL_SID_TYPE_NOBODY)
 #define CREDUTL_SID_IS_DONTCARE(sid) ((sid)->type == CREDUTL_SID_TYPE_DONTCARE)
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 IMPORT_DATA
 const
 
 credutl_sid_t CREDUTL_SID_NOBODY, CREDUTL_SID_DONTCARE;
-
-#ifdef __cplusplus
-} /* extern "C" */
-#endif
 
 #ifndef KS_MODE_MASK
 #define KS_MODE_MASK 0x00000fff
@@ -637,4 +653,4 @@ typedef enum ks_addrfamily {
 #define KS_NUM_ADDRESS_FAMILIES 2
 
 #endif /* _KS_BASE_H_ */
-/* $Id: b8dbe6a5.05ab413b.bd03.15:a3:bf:06:15:34 $ */
+/* $Id: 7694d7ed.8daf11e2.8082.00:01:83:9c:f6:11 $ */

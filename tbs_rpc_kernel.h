@@ -1,4 +1,4 @@
-/* * (C) Copyright IBM Corporation 1990, 2010. */
+/* * (C) Copyright IBM Corporation 1990, 2012. */
 /*
  This program is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License as published by
@@ -26,7 +26,8 @@
 #include <ks_base.h>
 #include <ks_rpc.h>
 #include <tbs_base.h>
-#include <vob_mtype.h>
+#include <vob_kernel.h>
+#include <tbs_acl_kernel.h>
 
 /* The following macro is used to cast an xdr function for one kind of
    object (say u_long) to that for another kind of object (say tbs_fmode_t) */
@@ -210,6 +211,25 @@ EZ_XDR_ROUTINE(tbs_fstat_db_t);
  */
 EZ_XDR_ROUTINE(vob_mtype_t);
 
+/****************************************************************************
+ * xdr_tbs_sid_acl_h_t
+ * This prototype is here for everyone else, EZRPC actually generates the
+ * xdr_tbs_sid_acl_h_t
+ * 
+ * === SUMMARY LINE ===
+ * IN	*xdrs
+ * IN	*objp
+ */
+
+EZ_XDR_ROUTINE(tbs_sid_acl_h_t);
+
+EXTERN bool_t
+xdr_tbs_sid_acl_fragment_t(
+    XDR *xdrs,
+    ks_uint32_t *offset_p,
+    tbs_sid_acl_h_t *objp
+);
+
 #if !defined(TBS_RPC_DECLS_ONLY) && defined(TBS_XDR_FUNC)
 #define xdr_vob_mtype_t (TBS_XDR_FUNC(vob_mtype_t) xdr_enum)
 #endif /* !TBS_RPC_DECLS_ONLY && TBS_XDR_FUNC */
@@ -224,4 +244,4 @@ extern bool_t   atria_xdr_long(XDR *, long * EZ_XDR_ARGDECL);
 #endif /* defined(ATRIA_LP64) */
 
 #endif /* !defined(_TBS_RPC_KERNEL_H_) */
-/* $Id: 906dedcb.e88d11df.83a2.00:01:83:29:b7:67 $ */
+/* $Id: 67d7480d.569111e2.8db0.00:01:83:9c:f6:11 $ */

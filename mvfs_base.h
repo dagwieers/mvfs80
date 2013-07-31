@@ -25,11 +25,17 @@
 #define MVFS_BASE_H_
 
 
+#include "tbs_acl_kernel.h"
 #include "view_rpc_kernel.h"
 #include "mfs_stats.h"
 #include "mfs_ioctl.h"
 #include "mfs_mount.h"
 #include "mfs_audit.h"
+
+/* Declare this as an "opaque" type (handle) used in calls to mvfs_acl_*
+** functions, since only mvfs_acl.c needs to understand it.
+*/
+typedef KS_HANDLE(mvfs_acl_h);
 
 #ifdef MVFS_USE_SPLIT_ORDERED_HASH
 #include "mvfs_sohash_table.h"
@@ -80,6 +86,9 @@ typedef char mfs_hn_char_t;		/* Hostname character type */
          tv.tv_sec = 0; \
          tv.tv_usec = 0; \
 }
+#define MVFS_TIMEVAL_EQUAL(tv1, tv2) (DATE_TIMEVALCMP(tv1, tv2) == 0)
+#define MVFS_TIMEVAL_NEWER(tv1, tv2) (DATE_TIMEVALCMP(tv1, tv2) == 1)
+#define MVFS_TIMEVAL_OLDER(tv1, tv2) (DATE_TIMEVALCMP(tv1, tv2) == -1)
 
 /*
  * PROTOTYPES and subroutine definitions
@@ -644,8 +653,15 @@ MVFS_CL(LOCK_T           cred_lock;)    /* Lock while changing cred */
          * to store the converted native ids. They are to be kept in sync
          * with view_vstat_t.
          */
-        MVFS_USER_ID      user_id; /* uid or union of uid/user sid on NT */
+        MVFS_USER_ID      user_id;  /* uid or union of uid/user sid on NT */
         MVFS_GROUP_ID     group_id; /* gid or union of gid/group sid on NT */
+
+        /* The view_vstat_t only carries around a rolemap dbid and update time
+        ** in order to save space (kept in attr above), so we cache the
+        ** effective ACL (EACL) that is needed for access checking.
+        */
+        mvfs_acl_h mn_aclh;
+
 	int		  pages_mapped; /* number of pages mapped */
 };
 
@@ -812,6 +828,7 @@ typedef struct mvfs_statistics_data {
         struct mfs_rlstat mfs_rlstat;        /* Readlink cache */
         struct mfs_clearstat mfs_clearstat;  /* Cleartext operations */
         struct mfs_austat mfs_austat;        /* Audit operations */
+        struct mvfs_eacstat mvfs_eacstat;    /* EACL cache stats */
 
         MVFS_STAT_CNT_T mfs_vnopcnt[MFS_VNOPCNT];  /* Vnode op calls counted */
         MVFS_STAT_CNT_T mfs_vfsopcnt[MFS_VFSOPCNT];/* VFS op calls counted */
@@ -846,33 +863,43 @@ extern struct mfs_rpchist mvfs_init_viewophist;
 /* View objects - vnodes that describe a view itself */
 
 struct mfs_viewnode {
-	view_handle_t	vh;	/* View handle */
-	u_int		hm : 1;	/* History mode flag */
-	u_int		nocfg : 1;	/* No config spec error printed */
-	u_int		needs_recovery : 1;	/* Needs recovery printed */
-	u_int		needs_reformat : 1;	/* Needs reformat printed */
-	u_int		always_cover : 1;	/* Always make loopback vnodes */
-	u_int		zombie_view : 1; 	/* View stg error printed */
-        u_int           windows_view : 1;   /* View on Windows NT or 2k */
-        u_int           lfs_view : 1;       /* LFS view                */
-        u_int           downrev_view : 1;       /* view at prev release */
-	u_int	        pad : 23;
-	mfs_pn_char_t   *viewname;	/* View tag name */
-	struct mfs_svr	svr;	/* View server info */
-	u_int		id;	/* View index in /view (for making inums, etc) */
-	u_int		exid;	/* View export ID (for making xfid's) */
-	MVFS_USER_ID    cuid;	/* Creator's uid or uid/SID for nt view */
-	MVFS_GROUP_ID   cgid;	/* Creator's gid or gid/SID for nt view */
-	timestruc_t	ctime;  /* Created time */
-	time_t          usedtime;  /* Last used time (for cleanup) */
-	LOCK_T		 stamplock;	/* Lock on vobstamps */
-	struct mvfs_vobstamp
-			vobstamps[MVFS_NUM_VOB_STAMPS]; /* VOB update timestamps */
-	int		vobstamp_next;	/* round-robin replacement ptr */
-	time_t          rpctime;        /* Last RPC time (for cleanup) */
-        void            *mdep_datap;	/* Machine dep data */
-	struct mvfs_pvstat
-			*pvstat;	/* Per-view statistics */
+    view_handle_t   vh;         /* View handle */
+
+    /* These bits are set once at view mnode creation time, or if reset just
+    ** cause an extra log message, so we don't need to lock when accessing them.
+    */
+    u_int           hm : 1;             /* History mode flag */
+    u_int           nocfg : 1;          /* No config spec error printed */
+    u_int           needs_recovery : 1; /* Needs recovery printed */
+    u_int           needs_reformat : 1; /* Needs reformat printed */
+    u_int           zombie_view : 1;    /* View stg error printed */
+    u_int           windows_view : 1;   /* View on Windows NT or 2k */
+    u_int           pad : 26;
+    /* These next 2 flags have been separated out from the above flag bits.
+    ** These 2 flag words may be set after initialization.  While these 2 flags
+    ** are never reset, it would be possible for concurrent setting of these
+    ** flags to interact if they were bit fields in the same flag.  No locking
+    ** is needed currently for either flag word, but if it were needed in the
+    ** future, these flags could be locked with different locks (which would
+    ** simplify lock ordering issues).
+    */
+    u_int           always_cover;       /* Always make loopback vnodes */
+    u_int           downrev_view;       /* View is at prev release */
+
+    mfs_pn_char_t  *viewname;   /* View tag name */
+    struct mfs_svr  svr;        /* View server info */
+    u_int           id;         /* View index in /view (for making inums, etc) */
+    u_int           exid;       /* View export ID (for making xfid's) */
+    MVFS_USER_ID    cuid;       /* Creator's uid or uid/SID for nt view */
+    MVFS_GROUP_ID   cgid;       /* Creator's gid or gid/SID for nt view */
+    timestruc_t     ctime;      /* Created time */
+    time_t          usedtime;   /* Last used time (for cleanup) */
+    LOCK_T          stamplock;  /* Lock on vobstamps */
+    struct mvfs_vobstamp vobstamps[MVFS_NUM_VOB_STAMPS]; /* VOB update times */
+    int             vobstamp_next;      /* round-robin replacement ptr */
+    time_t          rpctime;    /* Last RPC time (for cleanup) */
+    void           *mdep_datap; /* Machine dep data */
+    struct mvfs_pvstat *pvstat; /* Per-view statistics */
 };
 
 
@@ -1332,6 +1359,12 @@ extern u_long mfs_mn_newattrgen(P_NONE);
 	VTOM(vp)->mn_vob.attrtime.tv_sec=0; \
     }
 
+/* We should always have a vp, but we don't really need it to do the inval. */
+#define MVFS_ATTRINVAL_MNP(mnp) {          \
+	ASSERT(MFS_ISVOB(mnp));            \
+	(mnp)->mn_vob.attrtime.tv_sec = 0; \
+    }
+
 /* 
  * Check for valid attrs on an object.
  * if attrs are valid (but unknown timedout state), use routine
@@ -1339,13 +1372,44 @@ extern u_long mfs_mn_newattrgen(P_NONE);
  */
 #define MFS_ATTRISVALID(vp) (VTOM(vp)->mn_vob.attrtime.tv_sec != 0)
 
+/* Define a macro, MVFS_CODE_LOC, that can be used to log the code location in
+** MVFS where the macro is invoked.
+*/
+#define MVFS_STRINGIFY(x) #x
+#define MVFS_TOSTRING(x) MVFS_STRINGIFY(x)
+#define MVFS_CODE_LOC __FILE__ ":" MVFS_TOSTRING(__LINE__)
+
 /* Check for stale on a view/vob object.
  * If stale, then flush name caches user only sees the
  * stale-ness once.
  */
+#define MFS_CHK_STALE(err, vp)                                          \
+    if ((err) == ESTALE) {                                              \
+        mfs_fix_stale(vp);                                              \
+        mvfs_log(MFS_LOG_ESTALE, "stale check at %s\n", MVFS_CODE_LOC); \
+    }
 
-#define MFS_CHK_STALE(err,vp) \
-	if ((err) == ESTALE) mfs_fix_stale(vp);
+/* Since we can't MFS_CHK_STALE without the vnode ptr that we might not have
+** (e.g. we might have been called from mfs_makevobnode() after the mfs_mnget()
+** but before the MVFS_VNGET), we define this macro to work with just an mnode
+** pointer and vfs pointer.  Copy what we can from the body of mfs_fix_stale()
+** for the no-vp case.
+*/
+#define MVFS_CHK_STALE_MNP(err, mnp, vfsp)                              \
+    if (MTOV(mnp) != NULL) {                                            \
+        MFS_CHK_STALE((err), MTOV(mnp));                                \
+    } else {                                                            \
+        if ((err) == ESTALE) {                                          \
+            mvfs_dnc_flushvfs(vfsp);                                    \
+            MVFS_ATTRINVAL_MNP(mnp);                                    \
+            mvfs_log(MFS_LOG_ESTALE,                                    \
+                     "stale object vw=%s vob=%s dbid=%#x at %s\n",      \
+                     mfs_vw2nm((mnp)->mn_hdr.viewvp),                   \
+                     (vfsp) != NULL ?                                   \
+                         VFS_TO_MMI(vfsp)->mmi_mntpath : "",            \
+                     (mnp)->mn_hdr.fid.mf_dbid, MVFS_CODE_LOC);         \
+        }                                                               \
+    }
 
 /* Following macro saves a stack layer when data needs
  * to be flushed to the audit file.  mfs_audit returns 1
@@ -1750,29 +1814,14 @@ mvfs_set_ac_timeout(
     int goodlvut
 );
 
-EXTERN int
-mvfs_ac_set_stat(
-    struct mfs_mnode *mnp,
-    view_vstat_t *vstat,
-    int goodlvut,
-    CRED_T *cred
-);
-
 EXTERN void
-mfs_attrcache(
-    VNODE_T *vp,
+mvfs_attrcache(
+    struct mfs_mnode *mnp,
+    VFS_T *vfsp,
     view_vstat_t *vstat,
     int expmod,     /* Indicates caller expects this modification */
     CRED_T *cred
 );
-
-EXTERN int
-mfs_chkaccess(P1(VNODE_T *vp)
-	      PN(int mode)
-	      PN(u_long vuid)
-	      PN(u_long vgid)
-	      PN(int vmode)
-	      PN(CRED_T *cred));
 
 EXTERN int
 mfs_evtime_valid(
@@ -2140,8 +2189,21 @@ mfs_clnt_change_mtype(
 
 EXTERN int
 mvfs_clnt_ping_server(
-    struct mfs_svr *svr,
-    CRED_T * cred
+   struct mfs_svr *svr,
+   CRED_T *cred
+);
+
+EXTERN int
+mvfs_clnt_get_eacl_mnp(
+    mfs_mnode_t *mnp,
+    VFS_T *vfsp,
+    CRED_T *cred,
+    tbs_oid_t *rolemap_oid_p,     /* In: rolemap OID to convert to an EACL. */
+    view_eacl_cursor_t *cursor_p, /* In/Out: cursor for chunks */
+    tbs_sid_acl_h_t *eaclh_p,     /* In/Out: EACL, caller must free. */
+    struct timeval *eacl_lut,     /* Out: EACL last update time. */
+    tbs_oid_t *policy_oid_p,      /* Out: policy OID, need for flushing. */
+    tbs_status_t *statusp         /* Out: TBS status. */
 );
 
 /* In mfs_clearops.c -- require mnode locked */
@@ -2628,14 +2690,17 @@ mvfs_bindsvr_port(
 );
 
 EXTERN int
-mfs_vwcall(P1(VNODE_T *)
-	   PN(VFS_T *)
-	   PN(int)
-	   PN(xdrproc_t)
-	   PN(void *)
-	   PN(xdrproc_t)
-	   PN(void *)
-	   PN(CRED_T *));
+mvfs_vwcall(
+    VNODE_T *vw,
+    VFS_T *vfsp,
+    int op,
+    xdrproc_t xdrargs,
+    void *argsp,
+    xdrproc_t xdrres,
+    void *resp,
+    CRED_T *cred,
+    enum clnt_stat *rpc_status
+);
 
 EXTERN int 
 mfscall(P1(struct mfs_callinfo *)
@@ -3612,12 +3677,6 @@ EXTERN int
 mvfs_ensure_power2(
     int n
 );
-extern void
-mvfs_clnt_support_lfs(
-    struct mfs_svr *svr,
-    VNODE_T *vw,
-    CRED_T *cred
-);
 
 extern int
 mvfs_stats_data_zero(mvfs_stats_data_t *sdp);
@@ -4037,17 +4096,7 @@ mvfs_stats_data_per_cpu_init(void);
 /*
  * Macro to get the maximum offset for a vnode
  */
-
-/*
- * RATLC01031475: downrev view support - when 7.1 clients talk to 6.0
- * views, need to be restrict client to behaving as if largefiles not supported.
- * RATLC01069062: only need to check for objects with specific view vp, does   
- * not apply for specdev, loopback. viewroot, vob root directories
- */
-#define MVFS_GET_MAXOFF(vp) (MFS_ISVOB(VTOM(vp)) ? \
-  ((VTOM(MFS_VIEW(vp)))->mn_view.downrev_view ? \
-      (MVFS_MAXOFF_32_T) : (MVFS_MAXOFF_T)) \
-  : (MVFS_MAXOFF_T))
+#define MVFS_GET_MAXOFF(vp) (MVFS_MAXOFF_T)
 
 /*
  * Timeout Values for View Server GETPROP Call
@@ -4074,4 +4123,4 @@ EXTERN tbs_boolean_t mvfs_unload_in_progress;
 #endif
 
 #endif /* MVFS_BASE_H_ */
-/* $Id: 1a09f87f.6afb11e2.970e.00:01:83:0d:bf:e7 $ */
+/* $Id: c492726d.804f11e2.822a.00:01:84:c3:8a:52 $ */

@@ -1,4 +1,4 @@
-/* * (C) Copyright IBM Corporation 1991, 2005. */
+/* *  (C) Copyright IBM Corporation 1998, 2012. */
 /*
  This program is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License as published by
@@ -21,29 +21,29 @@
  For support, please visit http://www.ibm.com/software/support
 
 */
-#if !defined(_KS_RPC_H_)
-#define _KS_RPC_H_
+#if !defined(_TBS_ACL_PVT_KERNEL_H_)
+#define _TBS_ACL_PVT_KERNEL_H_
 
-#include <linux/types.h>
+#define TBS_ACL_IMPLEMENTATION
 
-#include <linux/socket.h>
+/****************************************************************************
+ * tbs_sid_acl_h_t    Pointer to tbs_acl_pvt_t.
+ *
+ * tbs_acl_pvt_t      Access Control List
+ * .n_ents        Number of Access Control Entries.
+ * .ents_p        Array of Access Control Entries.
+ * .cooked_p      A "cooked" (compiled) representation of the ACL.
+ */
 
+typedef struct tbs_acl_pvt_t {
+    size_t n_ents;
+    KS_DYNARR(n_ents, tbs_acl_entry_t, *ents_p);
+    tbs_acl_cooked_info_t *cooked_p;
+} tbs_acl_pvt_t;
 
-#include "linux_krpc.h"                 /* our own custom hacks */
+typedef tbs_acl_pvt_t *tbs_sid_acl_h_t;
 
-#define EZ_XDR_ROUTINE_TYPE(name,type)          \
-EZ_EXTERN bool_t                                \
-xdr_##name(                                     \
-    XDR *xdrs,                                  \
-    type objp                                   \
-)
-#define EZ_XDR_ARGDECL /**/
-#define EZ_XDR_ARG /**/
-#define EZ_XDR_ARG_PASSTHRU /**/
-#define EZ_XDR_ARG_TIME_T /**/
-#define EZ_XDR_ROUTINE(name) EZ_XDR_ROUTINE_TYPE(name,name *)
+#define TBS_ACL_PVT_KERNEL_H_DEFINED
 
-#define EZ_EXTERN EXTERN
-
-#endif /* _KS_RPC_H */
-/* $Id: 698111fe.9c1e11dd.9a62.00:01:83:29:c0:fc $ */
+#endif /* _TBS_ACL_PVT_KERNEL_H_ */
+/* $Id: 0419ef27.0c1f11e2.93ec.00:01:83:9c:f6:11 $ */

@@ -1,4 +1,4 @@
-/* * (C) Copyright IBM Corporation 1991, 2011. */
+/* * (C) Copyright IBM Corporation 1991, 2013. */
 /*
  This program is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License as published by
@@ -2219,6 +2219,7 @@ register mfs_mnode_t *mnp;
 	    mvfs_rddir_cache_destroy(mnp);
 	    MVFS_FREE_ID(&mnp->mn_vob.user_id);
 	    MVFS_FREE_ID(&mnp->mn_vob.group_id);
+            mvfs_acl_uncache(mnp);
 	    /*
 	     * Release the cleartext's vattr information stored
 	     * by mvfs_clearattr.
@@ -4138,4 +4139,4 @@ mvfs_mnverify_destroy(void)
 
 	return (cnt);
 }
-static const char vnode_verid_mvfs_mnode_c[] = "$Id:  80a5617f.743911e1.81a9.00:01:84:c3:8b:ce $";
+static const char vnode_verid_mvfs_mnode_c[] = "$Id:  b259770c.5b6211e2.8064.00:01:83:9c:f6:11 $";

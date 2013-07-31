@@ -27,10 +27,6 @@
 #include <linux/types.h>
 #include "tbs_base.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 /* The tbs_errno set of routines are those tbs error reporting
  * routines that are also compiled for the kernel.
  *
@@ -60,10 +56,6 @@ tbs_status2errno (P1(tbs_status_t status));
 
 EXTERN tbs_status_t
 tbs_errno2status (P1(int st_errno));
-
-#ifdef __cplusplus
-} /* extern "C" */
-#endif
 
 #endif /* _TBS_ERRNO_H_ */
 /* $Id: a36119c6.9c1d11dd.9a62.00:01:83:29:c0:fc $ */

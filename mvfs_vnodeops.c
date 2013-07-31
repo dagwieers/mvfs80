@@ -125,8 +125,11 @@ mvfs_change_oid_subr(
 );
 
 STATIC int
-mvfs_groupmember(
-    u_long vgid, 
+mvfs_ac_set_stat(
+    mfs_mnode_t *mnp,
+    VFS_T *vfsp,
+    view_vstat_t *vstatp,
+    int goodlvut,
     CRED_T *cred
 );
 
@@ -2516,14 +2519,15 @@ int goodlvut;
 #define MFS_DOMOD	0x8
 
 /*
- * MFS_AC_SET_STAT - set the stats in the mnode
+ * MVFS_AC_SET_STAT - set the stats in the mnode
  * Return modified flags.
  */
 
-int
+STATIC int
 mvfs_ac_set_stat(
     mfs_mnode_t *mnp,
-    view_vstat_t *vstat,
+    VFS_T *vfsp,
+    view_vstat_t *vstatp,
     int goodlvut,
     CRED_T *cred
 )
@@ -2545,21 +2549,17 @@ mvfs_ac_set_stat(
      *    3) Only vobmod events (which don't need cleartext mod time)
      *       affect the name cache etc.
      */
-
-    if ((mnp->mn_vob.attr.fstat.mtime.tv_sec != 
-				vstat->fstat.mtime.tv_sec) ||
-    		 (mnp->mn_vob.attr.fstat.mtime.tv_usec != 
-				vstat->fstat.mtime.tv_usec))
+    if (!MVFS_TIMEVAL_EQUAL(&(mnp->mn_vob.attr.fstat.mtime),
+                            &(vstatp->fstat.mtime)))
+    {
 	flags |= MFS_DTMMOD;
-
+    }
     /* Compare vob modified times for changes in VOB (not view) */
-
-    if ((vstat->event_time.tv_sec != 
-			mnp->mn_vob.attr.event_time.tv_sec) ||
-		(vstat->event_time.tv_usec != 
-			mnp->mn_vob.attr.event_time.tv_usec))
+    if (!MVFS_TIMEVAL_EQUAL(&(mnp->mn_vob.attr.event_time),
+                            &(vstatp->event_time)))
+    {
 	flags |= MFS_VOBMOD;
-
+    }
     /* Compare object oids (detect COW which requires a cleartext
        dump/reload) */
 
@@ -2573,33 +2573,33 @@ mvfs_ac_set_stat(
 
        OIDNULL check is to avoid marking new mnodes which are
        being created */
-
-    if ((mnp->mn_vob.attr.mtype != vstat->mtype ||
-         VOB_MTYPE_IS_DO(vstat->mtype)) &&
+    if ((mnp->mn_vob.attr.mtype != vstatp->mtype ||
+         VOB_MTYPE_IS_DO(vstatp->mtype)) &&
         !MFS_OIDNULL(mnp->mn_vob.attr.obj_oid) &&
-        !MFS_OIDEQ(vstat->obj_oid, mnp->mn_vob.attr.obj_oid))
+        !MFS_OIDEQ(vstatp->obj_oid, mnp->mn_vob.attr.obj_oid))
     {
 	flags |= MFS_DOMOD;
 #ifdef MVFS_DEBUG
         mvfs_log(MFS_LOG_DEBUG, "oidchg mtype %d to %d\n",
-                 mnp->mn_vob.attr.mtype, vstat->mtype);
+                 mnp->mn_vob.attr.mtype, vstatp->mtype);
 #endif
     }
+    /* Cache the view attributes by copying them into the mnode.  The subsequent
+    ** calls convert some of the attribute fields and cache those results, too.
+    */
+    mnp->mn_vob.attr = *vstatp;  /* Structure copy. */
 
-    /* Save view attributes. */
+    /* Convert the vstat/fstat ids and cache the result. */
+    MVFS_CREDUTL_SIDS_TO_NATIVE_IDS(mnp, cred);
 
-    mnp->mn_vob.attr = *vstat;
-
-    MVFS_CREDUTL_SIDS_TO_NATIVE_IDS(mnp, cred); /* Convert to native */
+    /* Convert the vstat rolemap to an EACL and cache the result. */
+    mvfs_acl_cache(mnp, vfsp, cred);
 
     /* Set timeout on attribute cache. */
-
-    mvfs_set_ac_timeout(mnp, mnp->mn_hdr.vfsp, 0, TRUE, goodlvut);
+    mvfs_set_ac_timeout(mnp, vfsp, 0, TRUE, goodlvut);
 
     /* Return modified flags */
-
     return(flags);
-
 }
 
 /*
@@ -2718,38 +2718,36 @@ mfs_ac_modevents(
     }	   /* end of modified or vob modified */
 }
 
-/* MFS_ATTRCACHE - routine to manage object attribute cache.
-   This routine should be called with the MVI struct locked! */
+/* MVFS_ATTRCACHE - routine to manage object attribute cache.
+   This routine should be called with the mnode locked! */
 
 void
-mfs_attrcache(
-    VNODE_T *vp,
-    view_vstat_t *vstat,
+mvfs_attrcache(
+    mfs_mnode_t *mnp,
+    VFS_T *vfsp,
+    view_vstat_t *vstatp,
     int expmod,     /* Indicates caller expects this modification */
     CRED_T *cred
 )
 {
-    mfs_mnode_t *mnp;
+    VNODE_T *vp;
     int modflags;
-
-    mnp = VTOM(vp);
 
     ASSERT(MISLOCKED(mnp));
     ASSERT(MFS_ISVOB(mnp));
-    ASSERT(mnp->mn_hdr.vp);
 
     /* First stuff the stats */
+    modflags = mvfs_ac_set_stat(mnp, vfsp, vstatp, FALSE, cred);
 
-    modflags = mvfs_ac_set_stat(mnp, vstat, FALSE, cred);
+    /* If we have a vnode we can manage other cached info. */
+    if ((vp = MTOV(mnp)) != NULL) {
+        /* Sync attributes with wrapper (if any) */
+        MVFS_WRAP_UPDATE_ATTRS(vp);
 
-    /* Sync attributes with wrapper (if any) */
-
-    MVFS_WRAP_UPDATE_ATTRS(vp);
-
-    /* Process and modified events */
-
-    if (expmod) modflags |= MFS_EXPMOD;
-    mfs_ac_modevents(vp, modflags, cred);
+        /* Process any modified events */
+        if (expmod) modflags |= MFS_EXPMOD;
+        mfs_ac_modevents(vp, modflags, cred);
+    }
 }
 
 /* MFS_EVTIME_VALID - validate event time */
@@ -2972,14 +2970,13 @@ mfs_getattr(
 	MLOCK(mnp);
 
 	/* 
-         * Get latest cleartext attrs if a view object.
-	 * Don't bother doing this for 'immutable' objects
-	 * in a VOB.  In that case, we got the stats at
-	 * getcleartext time (if the cleartext is active),
-	 * and they shouldn't have changed.  This saves
-	 * lots of 'refresh' stats over NFS to the cleartext
-	 * pool (about 90% of the traffic we generate to
-	 * the cleartext pool).
+         * Get latest cleartext attrs if a view object.  Don't bother doing this
+	 * for 'immutable' objects in a VOB.  In that case, we got the stats at
+	 * getcleartext time (if the cleartext is active), and they shouldn't
+	 * have changed.  This saves lots of 'refresh' stats over NFS to the
+	 * cleartext pool (about 90% of the traffic we generate to the cleartext
+	 * pool).  The passed in vap is only used for its mask.  The attr values
+	 * are filled in below from the view/vob object.
          */
 
 	if (mnp->mn_hdr.realvp && !mnp->mn_vob.cleartext.isvob) {
@@ -3520,17 +3517,18 @@ mvfs_changeattr(
 	     */
 
 	    if (view_db_mask & (AT_MTIME|AT_ATIME)) {
-                if ( ((MVFS_COMPARE_MNODE_UID(MVFS_CD2CRED(cd),
-                        mnp->mn_vob.user_id)) == FALSE) &&
+                if (((MVFS_COMPARE_MNODE_UID(MVFS_CD2CRED(cd),
+                                             mnp->mn_vob.user_id)) == FALSE) &&
                      (MVFS_CHKACCESS_MNODE(vp, VWRITE, mnp->mn_vob.user_id,
-                        mnp->mn_vob.group_id, mnp->mn_vob.attr.fstat.mode,
-				    MVFS_CD2CRED(cd)) != 0) ) 
+                                           mnp->mn_vob.group_id,
+                                           mnp->mn_vob.attr.fstat.mode,
+                                           MVFS_CD2CRED(cd)) != 0))
                 {
-		        error = EACCES;
-		        MUNLOCK(mnp);
-		        break;
+                    error = EACCES;
+                    MUNLOCK(mnp);
+                    break;
                 }
-	    }
+            }
 		
     	    /* Change the attributes in the view.  
 	     * All setattr calls have writer class credentials. 
@@ -3779,14 +3777,14 @@ mfs_accessv(
 
 int
 mvfs_accessv_ctx(
-    VNODE_T *vp,
+    VNODE_T *avp,
     int mode,
     int flag,				/* NYI; not currently used */
     CALL_DATA_T *cd,
     MVFS_ACCESS_CTX_T *ctxp
 )
 {
-
+    VNODE_T *vp = avp;
     VATTR_T va;
     int error;
     MVFS_DECLARE_THREAD(mth)
@@ -3801,8 +3799,7 @@ mvfs_accessv_ctx(
 
     if (MFS_ISLOOP(VTOM(vp))) {
         error = MVOP_ACCESS(MFS_REALVP(vp), mode, 0, cd, ctxp);
-        MVFS_EXIT_FS(mth);
-        return error;
+        goto done;
     }
 
     /* Request the attributes we will use, for cleanliness (used to be
@@ -3814,86 +3811,36 @@ mvfs_accessv_ctx(
 
     error = mfs_getattr(vp, &va, 0, cd);
     if (error) {
-        MVFS_FREE_VATTR_FIELDS(&va); /* free nt sids if copied */
-        MDB_VLOG((MFS_VACCESS,"vp=%"KS_FMT_PTR_T" err=%d: getattr failed\n",vp, error));
-        MVFS_EXIT_FS(mth);
-        return error;
+        MDB_VLOG((MFS_VACCESS, "vp=%"KS_FMT_PTR_T" err=%d: getattr failed\n",
+                  vp, error));
+        goto cleanup;
+    }
+    /* If an unbound root is passed to mfs_getattr() above, then it returns the
+    ** mode bits for the bound root in the va structure.  Those attrs are passed
+    ** to the MVFS_CHKACCESS macro which then doesn't need the vp (for the
+    ** unbound root) for anything.  However, if ACLs need to be checked, then
+    ** they are cached in the mnodes for the bound roots and the unbound vob
+    ** root mnode doesn't have any ACL cached.  Thus, we need to pass the bound
+    ** root here (and rele it if we bound it).  If the mfs_bindroot() fails with
+    ** ESRCH, meaning there's no view, that's OK since we'll just check the mode
+    ** bits.  If there's some other error, we're done.
+    */
+    if (MFS_ISVOBRT(VTOM(vp)) && !(flag & MVFS_GETATTR_NO_BINDROOT)) {
+        vp = mfs_bindroot(vp, cd, &error);
+        if (error != 0 && error != ESRCH) {
+            goto cleanup;
+        }
     }
     error = MVFS_CHKACCESS(vp, mode, &va, MVFS_CD2CRED(cd));
+    if (vp != avp) {
+        VN_RELE(vp); /* We bound it (and held it) above. */
+    }
+  cleanup:
     MVFS_FREE_VATTR_FIELDS(&va);
+  done:
     MVFS_EXIT_FS(mth);
-    return error;
-}
-
-int
-mfs_chkaccess(vp, mode, vuid, vgid, vmode, cred)
-VNODE_T *vp;
-int mode;
-u_long vuid;
-u_long vgid;
-int vmode;
-CRED_T *cred;
-{
-
-    int error;
-
-    /* Superuser always gets access */
-
-    if (MDKI_CR_IS_ROOT(cred)) {
-	MDB_VLOG((MFS_VACCESS,"vp=%"KS_FMT_PTR_T" err=%d: superuser match\n",vp,0));
-	return(0);
-    }
-
-    /* Access check based on only one of
-       owner, group, public (checked in that order) */
-
-    if (MDKI_CR_GET_UID(cred) != vuid) {
-	/* Not owner - try group */
-	mode >>= 3;
-	if (MDKI_CR_GET_GID(cred) != vgid) {
-	    /* Not group, try group list */
-	    if (!MVFS_GROUPMEMBER(vgid, cred))
-		/* No groups, try public */
-		mode >>= 3;			
-	}
-    }
-
-    if ((vmode & mode) == mode) {
-	error = 0;
-    } else {
-	error = EACCES;
-    }
-
-    MDB_VLOG((MFS_VACCESS,"vp=%"KS_FMT_PTR_T" err=%d: rqst=%o, mode=%o\n",vp,error,mode,vmode));
     return(error);
 }
-
-#ifdef MVFS_GROUPMEMBER_DEFAULT
-/*
- * Routine to check if a gid is a member of the group list.
- */
-STATIC int
-mvfs_groupmember(u_long vgid, CRED_T *cred)
-{
-	CRED_GID_T *gp;
-	CRED_GID_T *gpe;
-
-	gp = MDKI_CR_GET_GRPLIST(cred);
-	gpe = MDKI_CR_END_GRPLIST(cred);
-#ifdef MFS_NO_GROUPCOUNT_IN_CRED
-	/* List terminated by special null value */
-	for (; gp < gpe && *gp != CRED_EOGROUPS; gp++)
-#else
-	for (; gp < gpe; gp++)
-#endif
-	{
-	    if (vgid == *gp) {
-		return(TRUE);
-	    }
-	}
-	return(FALSE);
-}
-#endif  /* MVFS_GROUPMEMBER_DEFAULT */
 
 int
 mfs_readlink(
@@ -4616,21 +4563,16 @@ mvfs_lookup_ctx(
 			mfs_vp2dbid(dvp), nm);
 		}
 	    }
-
 	    /* 
              * If got a successful (non-cached) lookup, then the
 	     * result must be valid for itself.  Update the rebind
  	     * cache for the target object to indicate this.
 	     */
-
 	    if (*vpp && !fromcache) {
 		mfs_rebind_self(*vpp, cd);
 	    }
-
             /* 
 	     * Check if we looked up ".." and found a vob root synonym.
-             * The nm[0] check is a fast way to avoid doing a strcmp on
-             * most name lookups.
              *
              * For non-history-mode lookups, root synonyms are as follows:
              * dvp/.. -> root version (edbid = root edbid, vdbid = *) (lookup)
@@ -4643,43 +4585,42 @@ mvfs_lookup_ctx(
              * root branch/..  -> root element (edbid=vdbid= root dbid)
              * THIS IS THE ROOT SYNONYM we want to skip to the pseudo-root for
    	     */
-
-	    if (!error &&  (mfs_hmcmp(nm, ".") || mfs_hmcmp(nm, ".."))) {
+	    if (!error && ((mfs_hmcmp(nm, ".") == 0) ||
+                           (mfs_hmcmp(nm, "..") == 0)))
+            {
 		rootdbid = V_TO_MMI(dvp)->mmi_root_edbid;
 
 		if (MFS_ISROOTSYNONYM(*vpp, rootdbid)) {
 		    xvp = *vpp;		/* Save for audit */
-
 		    /* 
                      * Make loopback node (if needed) to not lose view
 		     * extended naming at the VOB root. Use view of 
                      * bound root vnode (could have warped from parent dir!)
 		     */
-
                     MVFS_VP_TO_CVP(VFS_TO_MMI(xvp->v_vfsp)->mmi_rootvp, &cvp);
 		    error = mfs_makeloopnode(MFS_VIEW(xvp), cvp, vpp,
                                              MVFS_CD2CRED(cd));
                     CVN_RELE(cvp);
-
                     /*
                     ** Check if someone ended the view while we are in it.  This
-                    ** is a lookup of ".." at the vob root, so return ESTALE,
-                    ** just like we do below if we call mfs_bindroot() (which
-                    ** calls mvfs_rvclookup(), which returns ESTALE, in this
-                    ** case).
-                    ** Copy some code from mfs_bindroot()
-                    ** and mvfs_rvclookup() to check our situation..  There is
-                    ** similar code in mfs_root() to catch people trying to
-                    ** sneak into the stale view with an absolute pathname.
+                    ** is a lookup of ".." that got the vob root, so return
+                    ** ESTALE, just like we do below if we call mfs_bindroot()
+                    ** (which calls mvfs_rvclookup(), which returns ESTALE, in
+                    ** this case).
+                    ** Copy some code from mfs_bindroot() and mvfs_rvclookup()
+                    ** to check our situation.  There is similar code in
+                    ** mfs_root() to catch people trying to sneak into the stale
+                    ** view with an absolute pathname.
                     */
                     if (!error) {
                         VNODE_T *vw;
 
                         if ((vw = mfs_getview(*vpp, MVFS_CD2CRED(cd),
-                                              FALSE /* NO HOLD */)) != NULL) {
+                                              FALSE /* NO HOLD */)) != NULL)
+                        {
                             if (VTOM(vw)->mn_view.id == MFS_NULLVID) {
                                 error = ESTALE;
-                                VN_RELE(*vpp);	/* mfs_makeloopnode() did a VN_HOLD */
+                                VN_RELE(*vpp);	/* makeloopnode did VN_HOLD. */
                                 *vpp = NULL;
                             }
                         }
@@ -4688,11 +4629,11 @@ mvfs_lookup_ctx(
 		     * Make sure bound root is in audit for both
 		     * parent and looked-up vnode. 
                      */
-
 		    if (!error) {
-	                MFS_AUDIT(MFS_AR_LOOKUP,dvp,
-                            PN_GET_CASE_CORRECT_COMP(pnp, nm, &cc_comp_buf), 
-                            NULL,NULL,xvp,cd);
+	                MFS_AUDIT(MFS_AR_LOOKUP, dvp,
+                                  PN_GET_CASE_CORRECT_COMP(pnp, nm,
+                                                           &cc_comp_buf),
+                                  NULL, NULL, xvp, cd);
 			if (cc_comp_buf != NULL)
 			    STRFREE(cc_comp_buf);
                     }
@@ -4709,8 +4650,10 @@ mvfs_lookup_ctx(
 	     * that mean we should skip auditing this file.
              */
 	    if ((*vpp) && MVFS_SKIP_AUDIT(*vpp)) { 
-    		MDB_VLOG((MFS_VLOOKUP,"mfs_lookup:  skipping audit of vp 0x%"KS_FMT_PTR_T"\n", 
-	    		*vpp));
+    		MDB_VLOG((MFS_VLOOKUP,
+                          "mfs_lookup:  skipping audit of vp 0x%"KS_FMT_PTR_T
+                          "\n",
+                          *vpp));
 		goto noauditout;
 	    }
 	    break;
@@ -4719,8 +4662,6 @@ mvfs_lookup_ctx(
 	    error = ENXIO;
 	    break;
     }
-
-    /* Do audit */
 
 do_audit:
     if (!error) {
@@ -4732,7 +4673,6 @@ do_audit:
     }
 
 noauditout:
-
     if (dvp != advp) VN_RELE(dvp);  /* Release if allocated bound root vnode */
 
     /* 
@@ -4740,7 +4680,11 @@ noauditout:
      * and mfs_makeloopnode(). So check for ISMFS first before doing VTOM 
      * in the following.
      */
-    MDB_VLOG((MFS_VLOOKUP,"vp=%"KS_FMT_PTR_T" nm=%s, rvp=%"KS_FMT_PTR_T", rmnp=%"KS_FMT_PTR_T", hit=%d, err=%d\n",dvp,nm,*vpp,(*vpp ? (MFS_VPISMFS(*vpp)?VTOM(*vpp):0) : 0), fromcache, error));
+    MDB_VLOG((MFS_VLOOKUP,
+              "vp=%"KS_FMT_PTR_T" nm=%s rvp=%"KS_FMT_PTR_T" rmnp=%"KS_FMT_PTR_T
+              " hit=%d err=%d\n",
+              dvp, nm, *vpp, (*vpp ? (MFS_VPISMFS(*vpp) ? VTOM(*vpp) : 0) : 0),
+              fromcache, error));
 
     BUMPSTAT(mfs_vnopcnt[MFS_VLOOKUP]);
     MVFS_EXIT_FS(mth);
@@ -7093,10 +7037,10 @@ mfs_makevobnode(
     if (vstatp) {
 	if (lvut) {
 	    mnp->mn_vob.lvut = *lvut;
-	    modflags = mvfs_ac_set_stat(mnp, vstatp, TRUE, cred);
+	    modflags = mvfs_ac_set_stat(mnp, vfsp, vstatp, TRUE, cred);
 	} else {
 	    mnp->mn_vob.lvut.tv_sec = mnp->mn_vob.lvut.tv_usec = 0;
-	    modflags = mvfs_ac_set_stat(mnp, vstatp, FALSE, cred);
+	    modflags = mvfs_ac_set_stat(mnp, vfsp, vstatp, FALSE, cred);
 	}
     } else {
 	modflags = 0;	/* Can't be modified */
@@ -7666,4 +7610,4 @@ mvfs_devadjust(dev_t dev, VNODE_T *vp)
 
 }
 
-static const char vnode_verid_mvfs_vnodeops_c[] = "$Id:  1471cfe8.7b9811e2.8fa1.00:01:83:0d:bf:e7 $";
+static const char vnode_verid_mvfs_vnodeops_c[] = "$Id:  bf2270f5.804f11e2.822a.00:01:84:c3:8a:52 $";

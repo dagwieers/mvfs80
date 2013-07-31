@@ -1,7 +1,7 @@
 #ifndef MVFS_LINUX_ONLY_H_
 #define MVFS_LINUX_ONLY_H_
 /*
- * Copyright (C) 1999, 2012 IBM Corporation.
+ * Copyright (C) 1999, 2013 IBM Corporation.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -298,7 +298,6 @@ vnode_d_instantiate(
 #define VNODE_DGET(dent) vnode_dget(dent,__FILE__,__func__,__LINE__)
 #define VNODE_DPUT(dent) vnode_dput(dent,__FILE__,__func__,__LINE__)
 #define VNODE_D_ALLOC_ROOT(vp) vnode_d_alloc_root(vp,__FILE__,__func__,__LINE__)
-#define VNODE_D_ALLOC_ANON(ip) vnode_d_alloc_anon(ip,__FILE__,__func__,__LINE__)
 #define VNODE_D_ALLOC(parent,name) vnode_d_alloc(parent, name,__FILE__,__func__,__LINE__)
 #define VNODE_D_ADD(dent,ino) vnode_d_add(dent,ino,__FILE__,__func__,__LINE__)
 #define VNODE_D_SPLICE_ALIAS(ino,dent) vnode_d_splice_alias(ino,dent,__FILE__,__func__,__LINE__)
@@ -307,7 +306,6 @@ vnode_d_instantiate(
 #define VNODE_DGET(dent) dget(dent)
 #define VNODE_DPUT(dent) dput(dent)
 #define VNODE_D_ALLOC_ROOT(vp) d_alloc_root(vp)
-#define VNODE_D_ALLOC_ANON(ip) d_alloc_anon(ip)
 #define VNODE_D_ALLOC(parent,name) d_alloc(parent, name)
 #define VNODE_D_ADD(dent,ino) d_add(dent,ino)
 #define VNODE_D_SPLICE_ALIAS(ino,dent) d_splice_alias(ino,dent)
@@ -998,7 +996,7 @@ typedef struct mdki_vop_close_ctx {
 # define MDKI_VFS_RENAME(OI, OD, OMNT, NI, ND, NMNT) vfs_rename(OI, OD, OMNT, NI, ND, NMNT)
 # define MDKI_NOTIFY_CHANGE(D, M, I) notify_change(D, M, I)
 #else
-/* SLES10, SLES11SP1, RHEL5, RHEL5-MRG, RHEL6, Ubuntu 10.04 */
+/* SLES10, SLES11SP1, RHEL5, RHEL5-MRG, RHEL6, Ubuntu 12.04 */
 # define MDKI_VFS_MKNOD(P, D, MNT, M, DEV) vfs_mknod(P, D, M, DEV)
 # define MDKI_VFS_UNLINK(RDIR, RDENT, MNT) vfs_unlink(RDIR, RDENT)
 # define MDKI_VFS_MKDIR(P, D, MNT, MODE) vfs_mkdir(P, D, MODE)
@@ -1011,7 +1009,7 @@ typedef struct mdki_vop_close_ctx {
 /* SLES10SP2 */
 # define MDKI_VFS_SYMLINK(P, D, MNT, NAME, MODE) vfs_symlink(P, D, MNT, NAME, MODE)
 #elif LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,32) 
-/* SLES11SP1, RHEL6, Ubuntu 10.04, MRG 2.0(RHEL6) */
+/* SLES11SP1, RHEL6, Ubuntu 12.04, MRG 2.0(RHEL6) */
 # define MDKI_VFS_SYMLINK(P, D, MNT, NAME, MODE) vfs_symlink(P, D, NAME)
 #elif LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,27)
 /* SLES11 */
@@ -1030,4 +1028,4 @@ typedef struct mdki_vop_close_ctx {
 #define STACK_CHECK()
 
 #endif /* MVFS_LINUX_ONLY_H_ */
-/* $Id: 8ab8d57b.f76811e1.86e2.00:01:84:c3:8a:52 $ */
+/* $Id: c9e055f0.9d7011e2.98c5.44:37:e6:71:2b:ed $ */

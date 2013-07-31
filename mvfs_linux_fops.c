@@ -457,9 +457,9 @@ vnode_fop_open(
     status = mdki_errno_unix_to_linux(status);
     mdki_linux_destroy_call_data(&cd);
 
-    MDKI_TRACE(TRACE_OPEN, "%s opened vp=%p fp=%p pvt=%p pcnt=%d\n",
+    MDKI_TRACE(TRACE_OPEN, "%s opened vp=%p fp=%p pvt=%p pcnt=%ld\n",
               __func__, vp, file_p, REALFILE(file_p),
-              REALFILE(file_p) ? F_COUNT(REALFILE(file_p)) : 0);
+               REALFILE(file_p) ? (long)F_COUNT(REALFILE(file_p)) : 0);
     if (avp != vp) {
         printk("switcheroo on open? %p became %p\n", avp, vp); /* XXX */
         BUG();
@@ -501,11 +501,11 @@ vnode_fop_release(
     mdki_linux_init_call_data(&cd);
     vp = ITOV(ino_p);
     MDKI_TRACE(TRACE_CLOSE,
-              "%s: fp=%p vp=%p fcount=%d pvt=%p rfcount=%d pid=%ld\n",
-              __func__, file_p, vp, F_COUNT(file_p),
-              REALFILE(file_p),
-              REALFILE(file_p) ? F_COUNT(REALFILE(file_p)) : 0,
-              (long) mdki_curpid());
+              "%s: fp=%p vp=%p fcount=%ld pvt=%p rfcount=%ld pid=%ld\n",
+               __func__, file_p, vp, (long)F_COUNT(file_p),
+               REALFILE(file_p),
+               REALFILE(file_p) ? (long)F_COUNT(REALFILE(file_p)) : 0,
+               (long)mdki_curpid());
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,18) || defined(SLES10SP2)
     ctx.file_p = file_p;
@@ -788,4 +788,4 @@ vnode_fop_readdir(
     return err;
 }
 
-static const char vnode_verid_mvfs_linux_fops_c[] = "$Id:  89a8d533.f76811e1.86e2.00:01:84:c3:8a:52 $";
+static const char vnode_verid_mvfs_linux_fops_c[] = "$Id:  13a9f437.0c1f11e2.93ec.00:01:83:9c:f6:11 $";
