@@ -1677,4 +1677,4 @@ out:
     MVFS_BUMPTIME(stime, dtime, mfs_austat.au_time);
     return;
 }
-static const char vnode_verid_mvfs_auditops_c[] = "$Id:  19c9f867.6afb11e2.970e.00:01:83:0d:bf:e7 $";
+static const char vnode_verid_mvfs_auditops_c[] = "$Id:  bfe27115.804f11e2.822a.00:01:84:c3:8a:52 $";

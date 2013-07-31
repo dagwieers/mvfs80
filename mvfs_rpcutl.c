@@ -43,7 +43,8 @@ mfscall_int(
     void *resp,
     CRED_T *cred,
     CLIENT *client,
-    VNODE_T *view
+    VNODE_T *view,
+    enum clnt_stat *rpc_status
 );
 
 STATIC void
@@ -101,12 +102,12 @@ mvfs_clnt_init(mvfs_cache_sizes_t *mma_sizes)
             /*
              * Success
              */
-            BZERO(mcdp->mvfs_rpc.mvfs_client_cache, 
+            BZERO(mcdp->mvfs_rpc.mvfs_client_cache,
                   mcdp->mvfs_client_cache_size * sizeof(client_cache_t));
             mcdp->mvfs_rpc.mvfs_client_cache_family = AF_UNSPEC;
             break;
 
-        /* 
+        /*
          * Size was too large, let's try a smaller value.
          */
         } else if (mcdp->mvfs_client_cache_size > system_def_ccs) {
@@ -116,13 +117,18 @@ mvfs_clnt_init(mvfs_cache_sizes_t *mma_sizes)
             /* Try minium */
             mcdp->mvfs_client_cache_size = CLIENT_CACHE_SIZE_SMALL;
         } else {
-            mvfs_log(MFS_LOG_WARN, "Failed to allocate %d bytes for caching of client handles\n", 
-                     mcdp->mvfs_client_cache_size * sizeof(client_cache_t)); 
+            mvfs_log(MFS_LOG_WARN,
+                     "Failed to allocate %d bytes for caching of "
+                     "client handles\n",
+                     mcdp->mvfs_client_cache_size * sizeof(client_cache_t));
             mcdp->mvfs_client_cache_size = 0;
             return ENOMEM;
         }
-        mvfs_log(MFS_LOG_WARN, "Failed to allocate %d bytes for Client handles lowering size to %d\n", 
-                 old_size, mcdp->mvfs_client_cache_size * sizeof(client_cache_t));
+        mvfs_log(MFS_LOG_WARN,
+                 "Failed to allocate %d bytes for Client handles lowering "
+                 "size to %d\n",
+                 old_size,
+                 mcdp->mvfs_client_cache_size * sizeof(client_cache_t));
     }
     return 0;
 }
@@ -282,7 +288,8 @@ mvfs_clnt_get(
 
     /* Allocate a handle. */
 
-    if ((mcdp->mvfs_rpc.mvfs_client_cache_family == svr->addr.ks_ss_s.sa_family)) 
+    if ((mcdp->mvfs_rpc.mvfs_client_cache_family ==
+         svr->addr.ks_ss_s.sa_family))
     {
         MVFS_LOCK(&(mcdp->mvfs_rpc.mfs_client_lock));
         clientp = mcdp->mvfs_rpc.mvfs_client_cache;
@@ -334,17 +341,20 @@ getclient:
           default:
             if (waited == 0) {
                 mvfs_log(MFS_LOG_WARN,
-                         "cannot allocate RPC client handle, retrying (err %d)\n", error);
+                         "cannot allocate RPC client handle, retrying "
+                         "(err %d)\n",
+                         error);
                 MDKI_USECDELAY(1000000*5);	/* wait 5 sec */
                 waited++;
                 goto getclient;
             }
             mvfs_log(MFS_LOG_ERR,
-                     "cannot allocate RPC client handle, giving up (err %d)\n", error);
+                     "cannot allocate RPC client handle, giving up (err %d)\n",
+                     error);
             /* Fall through */
-            /* If normal errors have retried and failed again, they will 
-             * fall through to this case.  If the error is ERESTART 
-             * (or ERESTARTSYS on Linux) then it means that we have 
+            /* If normal errors have retried and failed again, they will
+             * fall through to this case.  If the error is ERESTART
+             * (or ERESTARTSYS on Linux) then it means that we have
              * received a signal.  We will not retry, just log the event
              * and get out.
              * It turns out that HP-UX does not have ERESTART, so be
@@ -358,7 +368,8 @@ getclient:
           case ERESTARTSYS:
 #endif
 	    mvfs_log(MFS_LOG_ERR,
-		     "cannot allocate RPC client handle, giving up (err %d)\n", error);
+		     "cannot allocate RPC client handle, giving up (err %d)\n",
+                     error);
             *client_p = NULL;		/* This is bad! */
             return error;
         }
@@ -366,18 +377,18 @@ getclient:
         if (view)
             BUMPVSTATV(view, clntstat.clntcreate);
         found = 0;
-        if ((mcdp->mvfs_rpc.mvfs_client_cache_family == 
+        if ((mcdp->mvfs_rpc.mvfs_client_cache_family ==
               svr->addr.ks_ss_s.sa_family) ||
-            (mcdp->mvfs_rpc.mvfs_client_cache_family ==  
+            (mcdp->mvfs_rpc.mvfs_client_cache_family ==
               AF_UNSPEC))
-        { 
+        {
             MVFS_LOCK(&(mcdp->mvfs_rpc.mfs_client_lock));
             clientp = mcdp->mvfs_rpc.mvfs_client_cache;
             for (i=0; i<mcdp->mvfs_client_cache_size; i++) {
                  if (!clientp->client) {
-                     if (mcdp->mvfs_rpc.mvfs_client_cache_family == AF_UNSPEC) 
-                     { 
-                         mcdp->mvfs_rpc.mvfs_client_cache_family = 
+                     if (mcdp->mvfs_rpc.mvfs_client_cache_family == AF_UNSPEC)
+                     {
+                         mcdp->mvfs_rpc.mvfs_client_cache_family =
                            svr->addr.ks_ss_s.sa_family;
                      }
                      clientp->inuse = 1;
@@ -406,7 +417,7 @@ getclient:
              }
              MVFS_UNLOCK(&(mcdp->mvfs_rpc.mfs_client_lock));
         }
-    }    
+    }
 
     if (!MDKI_CLNT_AUTH_VALID(client))
         MDKI_PANIC("mfs_clnt_alloc: null auth");
@@ -475,7 +486,7 @@ VNODE_T *view;
 }
 
 /*
- * Find the appropriate default setting for mvfs_client_cache_size based on 
+ * Find the appropriate default setting for mvfs_client_cache_size based on
  * mvfs_largeinit
  */
 STATIC int
@@ -485,7 +496,7 @@ mvfs_find_ccs(int largeinit)
 
     /*
      * For large-memory MP systems mvfs_client_cache_size needs to grow rapidly.
-     * But we don't want to change the number allocated by default on smaller 
+     * But we don't want to change the number allocated by default on smaller
      * systems (defined by mvfs_largeinit <= 2).
      */
     if ((largeinit >= 0) && (largeinit <= 2)) {
@@ -568,7 +579,7 @@ mvfs_get_boottime(void)
 #if defined(MVFS_COMMON_ALLOC_XID)
 /* Routine to allocate unique XID for RPCs between MVFS and CC servers */
 
-ks_uint32_t 
+ks_uint32_t
 mvfs_alloc_xid(void)
 {
     ks_uint32_t xid = 0;
@@ -611,7 +622,7 @@ retry:
  *	before allocating the XID (XID's are monotonically increasing
  *	per machine in the order they are grabbed).  The same socket
  *	must be held around until the call either succeeds or
- * 	failure is assumed.  Grabbing the socket first prevents
+ *      failure is assumed.  Grabbing the socket first prevents
  *	any scheduling/locking anomalies from causing two processes to get
  *	XID's in one order, and then use them in a different order
  *	to the server.
@@ -624,80 +635,171 @@ retry:
 /* Base time shift for each call.  This allows the user
    to specify one timeout value for the server, and adjusts
    for those calls we know are more timeconsuming.  Too short
-   a timeout for "long" calls would result in unnecessary retries. 
-   A '*' next to the opname in the comment field indicates that
-   this op is not currently used by the MFS */
+   a timeout for "long" calls would result in unnecessary retries.
+   'MVFS' next to the opname in the comment field indicates that
+   this op is used by the MVFS */
 
 int mfs_view_timeshft[VIEW_NUM_PROCS] = {
     0,	/* NULL */
-    0,	/* 001: VIEW_CONTACT* */
-    0,	/* 002: VIEW_SERVER_EXIT* */
-    0,	/* 003: VIEW_SETATTR */
-    0,	/* 004: VIEW_CREATE */
-    0,	/* 005: VIEW_REMOVE */
-    0,	/* 006: VIEW_RENAME */
-    0,	/* 007: VIEW_SYMLINK */
-    0,	/* 008: VIEW_MKDIR */
-    0,	/* 009: VIEW_RMDIR */
-    0,	/* 010: VIEW_READDIR */
-    0,	/* 011: VIEW_STATFS */
-    2,	/* 012: VIEW_CLTXT */
-    1,	/* 013: VIEW_CHANGE_OID */
-    0,	/* 014: VIEW_READDIR_EXT */
-    1,	/* 015: VIEW_GPATH */
-    0,	/* 016: VIEW_REVALIDATE */
-    0,	/* 017: VIEW_CLTXT_PNAME* */
-    1,	/* 018: VIEW_CHANGE_MTYPE */
-    0,	/* 019: VIEW_INVALIDATE_UUID */
-    0,	/* 020: VIEW_LINK */
-    0,	/* 021: VIEW_LOOKUP */
-    0,	/* 022: VIEW_GETATTR */
-    1,	/* 023: VIEW_REPLICA_ROOT */
-    0,	/* 024: VIEW_LOOKUP_EXT* */
-    0,	/* 025: VIEW_CREATE_CONTAINER* */
-    0,	/* 026: VIEW_REMOVE_CONTAINER* */
-    0,	/* 027: VIEW_RENAME_CONTAINER* */
-    0,	/* 028: VIEW_WINK* */
-    0,	/* 029: VIEW_READLINK */
-    0	/* 030- : Others* */
+    0,	/* 001: VIEW_CONTACT */
+    0,	/* 002: VIEW_SERVER_EXIT */
+    0,	/* 003: VIEW_SETATTR_V8: MVFS */
+    0,	/* 004: VIEW_CREATE_V8: MVFS */
+    0,	/* 005: VIEW_REMOVE_V8: MVFS */
+    0,	/* 006: VIEW_RENAME_V8: MVFS */
+    0,	/* 007: VIEW_SYMLINK_V8: MVFS */
+    0,	/* 008: VIEW_MKDIR_V8: MVFS */
+    0,	/* 009: VIEW_RMDIR_V8: MVFS */
+    0,	/* 010: VIEW_READDIR: MVFS */
+    0,	/* 011:  */
+    2,	/* 012: VIEW_CLTXT: MVFS */
+    1,	/* 013: VIEW_CHANGE_OID_V8: MVFS */
+    0,	/* 014: VIEW_READDIR_EXT: MVFS */
+    1,	/* 015: VIEW_GPATH: MVFS */
+    0,	/* 016: VIEW_REVALIDATE_V8: MVFS */
+    0,	/* 017: VIEW_CLTXT_PNAME */
+    1,	/* 018: VIEW_CHANGE_MTYPE_V8: MVFS */
+    0,	/* 019: VIEW_INVALIDATE_UUID: MVFS */
+    0,	/* 020: VIEW_LINK_V8: MVFS */
+    0,	/* 021: VIEW_LOOKUP (old) */
+    0,	/* 022: VIEW_GETATTR_V8: MVFS */
+    1,	/* 023: VIEW_REPLICA_ROOT_V8: MVFS */
+    0,	/* 024: VIEW_LOOKUP_EXT (old) */
+    0,	/* 025: VIEW_CREATE_CONTAINER: MVFS */
+    0,	/* 026: VIEW_REMOVE_CONTAINER: MVFS */
+    0,	/* 027: VIEW_RENAME_CONTAINER: MVFS */
+    0,	/* 028: VIEW_WINK: MVFS */
+    0,	/* 029: VIEW_READLINK: MVFS */
+    0,	/* 030: VIEW_RELOAD_SPEC */
+    0,  /* 031: VIEW_BLD_SESSION_FREE */
+    0,  /* 032: VIEW_EVENTS_GET_VOB */
+    0,  /* 033: VIEW_VOB_CREATE */
+    0,  /* 034: VIEW_FIND_OID_V8 */
+    0,  /* 035: VIEW_SEC_RULE */
+    0,  /* 036: VIEW_WHITE_OUT */
+    0,  /* 037: VIEW_UNWHITE_OUT */
+    0,  /* 038: VIEW_BLD_GET_REF_TIM */
+    0,  /* 039: VIEW_RECOVER */
+    0,  /* 040: VIEW_DUMP */
+    0,  /* 041: VIEW_LOAD */
+    0,  /* 042: VIEW_CR_GET */
+    0,  /* 043: VIEW_DO_PROMOTE */
+    0,  /* 044: VIEW_DO_PURGE_CLTXT */
+    0,  /* 045: VIEW_VOB_SAVE */
+    0,  /* 046: VIEW_BLD_SESSION_FLAGS */
+    0,  /* 047: VIEW_GET_TEXT_MODE */
+    0,  /* 048: VIEW_CR_ADD_VOB_REF_UUID */
+    0,  /* 049: VIEW_CR_RM_VOB_REF_UUID */
+    0,  /* 050: VIEW_VOB_GET_PATH_UUID */
+    0,  /* 051: VIEW_VOB_RM_PATH_UUID */
+    0,  /* 052: VIEW_VOB_RECOVER_OBJ_UUID */
+    0,  /* 053: VIEW_CR_SAVE */
+    0,  /* 054: VIEW_GETPROP */
+    0,  /* 055: VIEW_SETPROP */
+    0,  /* 056: VIEW_GETLIC */
+    0,  /* 057: VIEW_INVENTORY_UUIDS */
+    0,  /* 058: VIEW_SETWORK_GET_VOBS */
+    0,  /* 059: VIEW_SERVER_EXIT_RMTAG */
+    0,  /* 060: VIEW_STATISTICS */
+    0,  /* 061: VIEW_SET_VALUES */
+    0,  /* 062: VIEW_INVENTORY_VOBS_UUIDS */
+    0,  /* 063: VIEW_SETWORK_SET_VOBS */
+    0,  /* 064: VIEW_SETWORK_CLEANUP */
+    0,  /* 065: VIEW_HLINK_SET_VOBS */
+    0,  /* 066: VIEW_HLINK_CLEANUP */
+    0,  /* 067: VIEW_HLINK_GET_VOBS */
+    0,  /* 068: VIEW_WS_CREATE_DB */
+    0,  /* 069: VIEW_FRZ_GET_SCOPES */
+    0,  /* 070: VIEW_FRZ_GET_FREEZE_STATE */
+    0,  /* 071: VIEW_FRZ_GET_RELOAD_INFO */
+    0,  /* 072: VIEW_WS_BEGIN_LOAD_SESS */
+    0,  /* 073: VIEW_WS_END_LOAD_SESS */
+    0,  /* 074: VIEW_FRX_OK_TO_SET_SPEC */
+    0,  /* 075: VIEW_WS_UPD_WSO_ATTRS */
+    0,  /* 076: VIEW_WS_GET_SCOPE_ALIASES */
+    0,  /* 077: VIEW_WS_GET_UNVISITED_WSOS */
+    0,  /* 078: VIEW_WS_INVALIDATE_OBJ */
+    0,  /* 079: VIEW_WS_UNLOAD_ONE_OBJ */
+    0,  /* 080: VIEW_FRZ_GET_NUM_FROZEN */
+    0,  /* 081: VIEW_WS_GET_OBJ_SCOPES */
+    0,  /* 082: VIEW_WS_RENAME_OBJ */
+    0,  /* 083: VIEW_WS_IS_FRZ_OBJ */
+    0,  /* 084: VIEW_RELOAD_SPEC_EXT */
+    0,  /* 085: VIEW_WS_IS_MOD_WSO_EXT */
+    0,  /* 086: VIEW_PROTECT_STG_AS_CLNT */
+    0,  /* 087: VIEW_PROTECT_STG_CHECK */
+    0,  /* 088: VIEW_UNPROTECT_STG_AS_CLNT */
+    0,  /* 089: VIEW_UNPROTECT_STG_CHECK */
+    0,  /* 090: VIEW_REPARENT_VOB */
+    0,  /* 091: VIEW_GETOWN_SID */
+    0,  /* 092: VIEW_WS_LOAD_ONE_OBJ */
+    0,  /* 093: VIEW_WS_LOAD_ONE_SLINK */
+    0,  /* 094: VIEW_GET_CONFIG_SPEC */
+    0,  /* 095: VIEW_SET_CONFIG_SPEC */
+    0,  /* 096: VIEW_REPLACE_CONTAINER */
+    0,  /* 097: VIEW_PROTECT_CONTAINER */
+    0,  /* 098: VIEW_FSTAT_CONTAINER */
+    0,  /* 099: VIEW_WS_UNLOAD_ONE_OBJ_EXT */
+    0,  /* 100: VIEW_LOOKUP_V8: MVFS */
+    0,  /* 101: VIEW_LOOKUP_EXT_V8 */
+    0,  /* 102: VIEW_DOS_TO_UNSHARABLE */
+    0,  /* 103: VIEW_GET_DOS */
+    0,  /* 104: VIEW_DOS_FOUND */
+    1,  /* 105: VIEW_REPLICA_ROOT: MVFS */
+    0,  /* 106: VIEW_REVALIDATE: MVFS */
+    0,  /* 107: VIEW_LOOKUP: MVFS */
+    0,  /* 108: VIEW_GETATTR: MVFS */
+    0,  /* 109: VIEW_SETATTR: MVFS */
+    0,  /* 110: VIEW_CREATE: MVFS */
+    0,  /* 111: VIEW_REMOVE: MVFS */
+    0,  /* 112: VIEW_MKDIR: MVFS */
+    0,  /* 113: VIEW_RMDIR: MVFS */
+    0,  /* 114: VIEW_RENAME: MVFS */
+    0,  /* 115: VIEW_LINK: MVFS */
+    0,  /* 116: VIEW_SYMLINK: MVFS */
+    1,  /* 117: VIEW_CHANGE_MTYPE: MVFS */
+    2,  /* 118: VIEW_CHANGE_OID: MVFS */
+    1,  /* 119: VIEW_EACL_ROLEMAP: MVFS */
+    0,  /* 120: VIEW_FIND_OID */
+    0   /* 121: VIEW_LOOKUP_EXT */
 };
 
 char *mfs_viewopnames[VIEW_NUM_PROCS] = {
     "nil",
-    "contact",		/* 001: */
-    "srv_exit",		/* 002: */
-    "setattr",		/* 003: MVFS */
-    "create",		/* 004: MVFS */
-    "remove",		/* 005: MVFS */
-    "rename",		/* 006: MVFS */
-    "symlink",		/* 007: MVFS */
-    "mkdir",		/* 008: MVFS */
-    "rmdir",		/* 009: MVFS */
-    "readdir",		/* 010: MVFS */
-    "null",		/* 011: */
-    "getcleartext",	/* 012: MVFS */
-    "choid",		/* 013: MVFS */
-    "rddir_ext",	/* 014: MVFS */
-    "gpath",		/* 015: MVFS */
-    "revalidate",	/* 016: MVFS */
-    "cltxt_pname",	/* 017: */
-    "change_mtype",	/* 018: MVFS */
-    "invalidate",	/* 019: MVFS */
-    "link",		/* 020: MVFS */
-    "lookup_v6",	/* 021: MVFS */
-    "getattr",		/* 022: MVFS */
-    "replica_root",	/* 023: MVFS */
-    "lookup_ext_v6",	/* 024: */
-    "create_cntr",	/* 025: */
-    "remove_cntr",	/* 026: */
-    "rename_cntr",	/* 027: */
-    "wink",		/* 028: */
-    "readlink",		/* 029: MVFS */
-    "view_reload_spec", /* 030: */
+    "contact",                      /* 001: */
+    "srv_exit",                     /* 002: */
+    "setattr_v8",                   /* 003: MVFS */
+    "create_v8",                    /* 004: MVFS */
+    "remove_v8",                    /* 005: MVFS */
+    "rename_v8",                    /* 006: MVFS */
+    "symlink_v8"                    /* 007: MVFS */
+    "mkdir_v8",                     /* 008: MVFS */
+    "rmdir_v8",                     /* 009: MVFS */
+    "readdir",                      /* 010: MVFS */
+    "null",                         /* 011: */
+    "getcleartext",                 /* 012: MVFS */
+    "choid_v8",                     /* 013: MVFS */
+    "rddir_ext",                    /* 014: MVFS */
+    "gpath",                        /* 015: MVFS */
+    "revalidate_v8",                /* 016: MVFS */
+    "cltxt_pname",                  /* 017: */
+    "change_mtype_v8",              /* 018: MVFS */
+    "invalidate",                   /* 019: MVFS */
+    "link_v8",                      /* 020: MVFS */
+    "unused_lookup_v6",             /* 021: MVFS */
+    "getattr_v8",                   /* 022: MVFS */
+    "replica_root_v8",              /* 023: MVFS */
+    "unused_lookup_ext_v6",         /* 024: */
+    "create_cntr",                  /* 025: */
+    "remove_cntr",                  /* 026: */
+    "rename_cntr",                  /* 027: */
+    "wink",                         /* 028: */
+    "readlink",                     /* 029: MVFS */
+    "view_reload_spec",             /* 030: */
     "view_bld_session_free",        /* 031: */
     "view_events_get_vob",          /* 032: */
     "view_vob_create",              /* 033: */
-    "view_find_oid",                /* 034: */
+    "view_find_oid_v8",             /* 034: */
     "view_sec_rule",                /* 035: */
     "view_white_out",               /* 036: */
     "view_unwhite_out",             /* 037: */
@@ -763,16 +865,33 @@ char *mfs_viewopnames[VIEW_NUM_PROCS] = {
     "view_protect_container",       /* 097: */
     "view_fstat_container",         /* 098: */
     "view_ws_unload_one_obj_ext",   /* 099: */
-    "view_lookup",                  /* 100: MVFS */
-    "view_lookup_ext",              /* 101: */
+    "view_lookup_v8",               /* 100: MVFS */
+    "view_lookup_ext_v8",           /* 101: */
     "view_dos_to_unsharable",       /* 102: */
     "view_get_dos",                 /* 103: */
     "view_dos_found"                /* 104: */
+    "view_replica_root",            /* 105: MVFS */
+    "view_revalidate",              /* 106: MVFS */
+    "view_lookup",                  /* 107: MVFS */
+    "view_getattr",                 /* 108: MVFS */
+    "view_setattr",                 /* 109: MVFS */
+    "view_create",                  /* 110: MVFS */
+    "view_remove",                  /* 111: MVFS */
+    "view_mkdir",                   /* 112: MVFS */
+    "view_rmdir",                   /* 113: MVFS */
+    "view_rename",                  /* 114: MVFS */
+    "view_link",                    /* 115: MVFS */
+    "view_symlink",                 /* 116: MVFS */
+    "view_change_mtype",            /* 117: MVFS */
+    "view_change_oid",              /* 118: MVFS */
+    "view_eacl_rolemap",            /* 119: MVFS */
+    "view_find_oid",		    /* 120: */
+    "view_lookup_ext",              /* 121: */
 };
 
 int mfs_viewopmax = VIEW_NUM_PROCS;
 
-/* 
+/*
  * Keep histogram of RPC delays for following.
  * Note that separate histogram is kept for
  * cleartext fetch RPC which we expect might take a long time.
@@ -781,7 +900,7 @@ int mfs_viewopmax = VIEW_NUM_PROCS;
  */
 
 struct mfs_rpchist mvfs_init_viewophist = {
-    { 
+    {
         { 0,  50000000 },		/* .05 secs */
         { 0, 100000000 },		/* .1 secs */
         { 0, 250000000 },		/* .25 secs */
@@ -790,7 +909,7 @@ struct mfs_rpchist mvfs_init_viewophist = {
         { 2, 0 },			/* 2 sec */
         { 3, 0 },			/* 3 sec */
         { 4, 0 },			/* 4 sec */
-        { 8, 0 }, 			/* 8 sec */
+        { 8, 0 },                       /* 8 sec */
         { 16, 0 },			/* 16 sec */
         { 24, 0 },			/* 24 sec */
         { 32, 0 },			/* 32 sec */
@@ -808,32 +927,100 @@ struct mfs_rpchist mvfs_init_viewophist = {
 /* ALBD tables */
 
 int mfs_albd_timeshft[ALBD_NUM_PROCS] = {
-        0,		/* null */
-        0, 0, 0, 0,	/* contact,  register,  find,      idle */
-        0, 0, 0, 0, 	/* busy,     hostaddr,	localpath, licensechk */
-        0, 0, 0, 0, 	/* stats,    revoke,	schedinfo, rembuild */
-        0, 0, 0, 0, 	/* rgy_getid, rgy_findbystr, rgy_findbyuuid, rgy_get */
-        0, 0, 0, 0, 	/* rgy_add,  rgy_rem,	svr_alt_uuid, rgy_chk_access */
-        0, 	 	/* rgy_get_dtm */
+        0,              /* null */
+        0, 0, 0, 0,     /* contact,  register,  find,      idle */
+        0, 0, 0, 0,     /* busy,     hostaddr,  localpath, licensechk */
+        0, 0, 0, 0,     /* stats,    revoke,    schedinfo, rembuild */
+        0, 0, 0, 0,     /* rgy_getid, rgy_findbystr, rgy_findbyuuid, rgy_get */
+        0, 0, 0, 0,     /* rgy_add,  rgy_rem,   svr_alt_uuid, rgy_chk_access */
+        0,              /* rgy_get_dtm */
 };
 
 char *mfs_albdopnames[ALBD_NUM_PROCS] = {
-        "nil",
-        "contact", "register", "find_svr", "svridle",
-        "svrbusy", "host2addr", "localpath", "licensechk",
-        "licstats", "licrevoke", "schedinfo", "rembuild",
-        "rgy_getid", "rgy_findbystr", "rgy_findbyuuid", "rgy_get",
-        "rgy_add", "rgy_remove", "svr_alt_uuid", "rgy_chk_access",
-        "rgy_get_dtm",
+    "nil",
+    "contact",
+    "register",
+    "find_svr_v7",
+    "svridle",
+    "svrbusy",
+    "obs6",
+    "obs7",
+    "obs8",
+    "obs9",
+    "obs10",
+    "schedinfo",
+    "obs12",
+    "rgy_getid",
+    "rgy_findbystr",
+    "rgy_findbyuuid",
+    "rgy_get",
+    "rgy_add",
+    "rgy_remove",
+    "svr_alt_uuid",
+    "rgy_chk_access",
+    "rgy_get_dtm",
+    "list_svr_v7",
+    "get_loc_path",
+    "clnt_lookup_v7",
+    "lic_get_prd",
+    "hostinfo",
+    "clnt_reg",
+    "rgy_get_db",
+    "rgy_clnt_conf",
+    "rgy_svr_conf",
+    "rgy_get_bckup",
+    "rgy_set_bkup",
+    "rgy_findbyattr",
+    "obs35",
+    "get_jobs",
+    "has_info_changed",
+    "get_tasks",
+    "get_acl",
+    "set_acl",
+    "job_create",
+    "job_delete",
+    "job_lookup_by_id",
+    "job_get_props",
+    "job_set_props",
+    "job_has_info_changed",
+    "rjob_get_handle",
+    "rjob_get_compl_info",
+    "rjob_run_job",
+    "rjob_terminate",
+    "job_lookup_by_name",
+    "task_exists",
+    "task_name_to_id",
+    "check_acc",
+    "task_id_to_name",
+    "get_app_perms",
+    "lic_cc_auth_url",
+    "get_time",
+    "sched_contact",
+    "remote_build_hi",
+    "license_check_sid",
+    "license_sid_stats",
+    "license_revoke_sid",
+    "elcc_find_server_v70",
+    "elcc_is_elcc",
+    "tzinfo",
+    "toggle_server_restart",
+    "job_create_utc",
+    "job_get_props_utc",
+    "job_set_props_utc",
+    "find_server",
+    "elcc_find_server",
+    "list_servers",
+    "clnt_list_lookup",
+    "clnt_list_get",
 };
 
 /* Trait definitions */
 struct mfs_callinfo mfs_vwcallstruct = {
         VIEW_SERVER, VIEW_SERVER_VERS,
-        "View", 
-        mfs_viewopnames, 
+        "View",
+        mfs_viewopnames,
         mfs_view_timeshft,
-        mfs_view_getstatus, 
+        mfs_view_getstatus,
         mfs_view_getxid,
         mfs_view_setxid,
 };
@@ -904,12 +1091,12 @@ mvfs_bindsvr_port(
     */
     switch (albd_svrp->addr.ks_ss_s.sa_family) {
       case AF_INET:
-        albd_svrp->addr.ks_ss_sin4.sin_port = 
+        albd_svrp->addr.ks_ss_sin4.sin_port =
             VFS_TO_MMI(vrdp->mfs_viewroot_vfsp)->mmi_svr.addr.ks_ss_sin4.sin_port;
         break;
 
       case AF_INET6:
-        albd_svrp->addr.ks_ss_sin6.sin6_port = 
+        albd_svrp->addr.ks_ss_sin6.sin6_port =
             VFS_TO_MMI(vrdp->mfs_viewroot_vfsp)->mmi_svr.addr.ks_ss_sin4.sin_port;
         break;
 
@@ -958,17 +1145,17 @@ mvfs_bindsvr_port(
      *  If it does not work, then we must fall back to the old ALBD_FIND_SERVER_V70
      *  call that returns only an IPv4 address.
      */
-    error = mfscall(mfs_albdcall, ALBD_FIND_SERVER, 0, 
+    error = mfscall(mfs_albdcall, ALBD_FIND_SERVER, 0,
                     albd_svrp, albd_retryp,
                     (xdrproc_t) xdr_albd_find_server_req_t, (caddr_t)rap,
                     (xdrproc_t) xdr_albd_find_server_reply_t, (caddr_t)rrp,
                     cred, NULL);
     if (!error)
-        error = mfs_geterrno(rrp->hdr.status); 
+        error = mfs_geterrno(rrp->hdr.status);
     if (!error) {
-        /* 
+        /*
          * We do this check to handle IPv4-mapped IPv6 addresses.
-         * If we need the port for an IPv4-mapped IPv6 address, then 
+         * If we need the port for an IPv4-mapped IPv6 address, then
          * we grab the IPv4 port returned from the RPC.
          */
         if ((svr->addr.ks_ss_s.sa_family == AF_INET6) &&
@@ -997,14 +1184,14 @@ mvfs_bindsvr_port(
              }
         }
         if (!svr->svrbound)
-            error = EPFNOSUPPORT; 
+            error = EPFNOSUPPORT;
 
-        MDB_XLOG((MDB_ALBDOPS, "rebindsvr_port: %s:%s -> port %d, error=%d\n", 
+        MDB_XLOG((MDB_ALBDOPS, "rebindsvr_port: %s:%s -> port %d, error=%d\n",
                  svr->host, svr->rpn, rrp->port_list.ports[num_ports], error));
     }
     else {
-        /* 
-         * We must check for AF_INET because the old RPC does not support IPv6. 
+        /*
+         * We must check for AF_INET because the old RPC does not support IPv6.
          * We do allow IPv4-mapped IPv6 addresses with the old RPC though,
          * since we would then need the IPv4 port returned from the RPC.
          */
@@ -1014,7 +1201,7 @@ mvfs_bindsvr_port(
             error = EPFNOSUPPORT;
             goto cleanup;
         }
-        error = mfscall(mfs_albdcall, ALBD_FIND_SERVER_V70, 0, 
+        error = mfscall(mfs_albdcall, ALBD_FIND_SERVER_V70, 0,
                         albd_svrp, albd_retryp,
                         (xdrproc_t) xdr_albd_find_server_req_t, (caddr_t)rap,
                         (xdrproc_t) xdr_albd_find_server_v70_reply_t, (caddr_t)rrp_v70,
@@ -1036,7 +1223,7 @@ mvfs_bindsvr_port(
             }
             svr->svrbound = 1;
         }
-        MDB_XLOG((MDB_ALBDOPS, "rebindsvr_port: %s:%s -> port %d, error=%d\n", 
+        MDB_XLOG((MDB_ALBDOPS, "rebindsvr_port: %s:%s -> port %d, error=%d\n",
                  svr->host, svr->rpn, rrp_v70->saddr.sin_port, error));
     }
 
@@ -1048,10 +1235,10 @@ mvfs_bindsvr_port(
 }
 
 /*
- * MFS_VWCALL - make an rpc call to the view
+ * MVFS_VWCALL - make an rpc call to the view
  */
 int
-mfs_vwcall(
+mvfs_vwcall(
     VNODE_T *vw,
     VFS_T *vfsp,
     int op,
@@ -1059,7 +1246,8 @@ mfs_vwcall(
     void *argsp,
     xdrproc_t xdrres,
     void *resp,
-    CRED_T *cred
+    CRED_T *cred,
+    enum clnt_stat *rpc_status
 )
 {
     int error, user_error, callerr;
@@ -1113,23 +1301,25 @@ mfs_vwcall(
 
     while ((callerr = error = mfscall_int(mfs_viewcall, op, &xid,
                         &alloc_unitp->mnp->mn_view.svr, rinfop,  xdrargs, argsp,
-                        xdrres, resp, cred, alloc_unitp->client, vw)) == EAGAIN) {
-
+                        xdrres, resp, cred, alloc_unitp->client, vw,
+                        rpc_status)) == EAGAIN)
+    {
         error = mvfs_bindsvr_port(&VTOM(vw)->mn_view.svr, vfsp, cred, vw);
-
         if (error) {
             if (rinfop->soft) {
                 mvfs_log(MFS_LOG_ERR,
                          "View op %s failed rebind for %s:%s%s\n",
-                            mfs_viewopnames[op] ? mfs_viewopnames[op] : "unknown operation",
-                            alloc_unitp->mnp->mn_view.svr.host,
-                            alloc_unitp->mnp->mn_view.svr.rpn,
-                            mfs_strerr(error));
+                         mfs_viewopnames[op] ?
+                             mfs_viewopnames[op] : "unknown operation",
+                         alloc_unitp->mnp->mn_view.svr.host,
+                         alloc_unitp->mnp->mn_view.svr.rpn,
+                         mfs_strerr(error));
                 UPRINTF(("\nView op %s failed rebind for %s:%s%s \n",
-                        mfs_viewopnames[op] ? mfs_viewopnames[op] : "unknown operation",
-                        alloc_unitp->mnp->mn_view.svr.host,
-                        alloc_unitp->mnp->mn_view.svr.rpn,
-                        mfs_strerr(error)));
+                         mfs_viewopnames[op] ?
+                             mfs_viewopnames[op] : "unknown operation",
+                         alloc_unitp->mnp->mn_view.svr.host,
+                         alloc_unitp->mnp->mn_view.svr.rpn,
+                         mfs_strerr(error)));
                 break;
             }
         }
@@ -1171,12 +1361,13 @@ mfs_vwcall(
     /*
      * LOG interesting view-specific errors
      */
-
-    if (callerr == 0)
+    if (callerr == 0) {
         status = ((view_hdr_reply_t *)resp)->status;
-    else
+    } else {
         status = 0;
-    MDB_XLOG((MDB_RPCOPS, "view rpc %s callerr = %d, rebinderr = %d, status= %d user_error=%d\n",
+    }
+    MDB_XLOG((MDB_RPCOPS,
+              "vw rpc %s callerr=%d rebinderr=%d status=%d user_error=%d\n",
               mfs_viewopnames[op] ? mfs_viewopnames[op] : "<unknown>",
               callerr, error, status, mfs_geterrno(status)));
     if (!error && status != 0) {
@@ -1184,13 +1375,13 @@ mfs_vwcall(
         user_error = mfs_geterrno(status);
         switch (user_error) {
             case ESTALE:
-                pri = MFS_LOG_ESTALE; 
+                pri = MFS_LOG_ESTALE;
                 break;
             case EIO:
                 pri = MFS_LOG_ERR;
                 break;
-            default:     
-                pri = MFS_LOG_ERR; 
+            default:
+                pri = MFS_LOG_ERR;
                 break;
         }
         suppress_console_msg = 0;	/* By default, print to console */
@@ -1228,58 +1419,67 @@ print_error:
                     || suppress_last_pid != MDKI_CURPID()) {
 
                     suppress_last_pid = MDKI_CURPID();
-                    mvfs_log(MFS_LOG_ERR, "view=%s vob=%s%s\n", 
-                                mfs_vw2nm(vw), 
-                                VFS_TO_MMI(vfsp)->mmi_mntpath, 
-                                mfs_strerr(status));
+                    mvfs_log(MFS_LOG_ERR, "view=%s vob=%s%s\n",
+                             mfs_vw2nm(vw),
+                             VFS_TO_MMI(vfsp)->mmi_mntpath,
+                             mfs_strerr(status));
                     UPRINTF(("mvfs: ERROR: view=%s vob=%s%s\n",
-                             mfs_vw2nm(vw), 
+                             mfs_vw2nm(vw),
                              VFS_TO_MMI(vfsp)->mmi_mntpath,
                              mfs_strerr(status)));
                 }
                 break;
 
-              /* Special msg for VOB needs recovery 
+              /* Special msg for VOB needs recovery
                * with suggested command to run
                */
               case TBS_ST_VOB_NEEDS_RECOVERY:
                 if (!VFS_TO_MMI(vfsp)->mmi_needs_recovery) {
                     mvfs_log(MFS_LOG_ERR, "vob mount %s needs recovery: RUN\n",
-                                VFS_TO_MMI(vfsp)->mmi_mntpath);
-                    mvfs_log(MFS_LOG_ERR, "cleartool recovervob %s\n", 
-                                MFS_STRBUFPN_PAIR_GET_UPN(&(VFS_TO_MMI(vfsp)->mmi_svr.lpn)).s);
+                             VFS_TO_MMI(vfsp)->mmi_mntpath);
+                    mvfs_log(MFS_LOG_ERR, "cleartool recovervob %s\n",
+                             MFS_STRBUFPN_PAIR_GET_UPN(
+                                 &(VFS_TO_MMI(vfsp)->mmi_svr.lpn)).s);
                     VFS_TO_MMI(vfsp)->mmi_needs_recovery = 1;
                 }
-                UPRINTF(("mvfs: ERROR: vob mount %s needs recovery: RUN\ncleartool recovervob %s\n",
-                        VFS_TO_MMI(vfsp)->mmi_mntpath,
-                        MFS_STRBUFPN_PAIR_GET_UPN(&(VFS_TO_MMI(vfsp)->mmi_svr.lpn)).s));
+                UPRINTF(("mvfs: ERROR: vob mount %s needs recovery: RUN\n"
+                         "cleartool recovervob %s\n",
+                         VFS_TO_MMI(vfsp)->mmi_mntpath,
+                         MFS_STRBUFPN_PAIR_GET_UPN(
+                             &(VFS_TO_MMI(vfsp)->mmi_svr.lpn)).s));
                 break;
 
               case TBS_ST_VOB_NEEDS_REFORMAT:
                 if (!VFS_TO_MMI(vfsp)->mmi_needs_reformat) {
-                    mvfs_log(MFS_LOG_ERR, "vob mount %s needs reformatting: RUN\n",
-                                VFS_TO_MMI(vfsp)->mmi_mntpath);
-                    mvfs_log(MFS_LOG_ERR, "cleartool reformatvob %s\n", 
-                                MFS_STRBUFPN_PAIR_GET_UPN(&(VFS_TO_MMI(vfsp)->mmi_svr.lpn)).s);
+                    mvfs_log(MFS_LOG_ERR,
+                             "vob mount %s needs reformatting: RUN\n",
+                             VFS_TO_MMI(vfsp)->mmi_mntpath);
+                    mvfs_log(MFS_LOG_ERR, "cleartool reformatvob %s\n",
+                             MFS_STRBUFPN_PAIR_GET_UPN(
+                                 &(VFS_TO_MMI(vfsp)->mmi_svr.lpn)).s);
                     VFS_TO_MMI(vfsp)->mmi_needs_reformat = 1;
                 }
                 UPRINTF(("mvfs: ERROR: vob mount %s needs reformatting\n",
-                                VFS_TO_MMI(vfsp)->mmi_mntpath));
+                         VFS_TO_MMI(vfsp)->mmi_mntpath));
                 break;
               case TBS_ST_NOT_FOUND:
               case TBS_ST_ENOSPC:
-                /* These errors are handled at the clnt/clearop level 
+                /* These errors are handled at the clnt/clearop level
                  * when fetching cleartext, so don't print anything here.
                  */
                 break;
               case TBS_ST_CONFIG_SPEC_ERR:
-                mvfs_log(MFS_LOG_ERR, "error in the config specification for view %s\n",
-                            mfs_vw2nm(vw));
-                mvfs_log(MFS_LOG_ERR, "see the vobrpc_server_log on host %s for details\n",
-                            VFS_TO_MMI(vfsp)->mmi_svr.host);
-                UPRINTF(("mvfs: error in the configuration specification for view %s\nsee the vobrpc_server_log on host %s for details\n",
-                        mfs_vw2nm(vw),
-                        VFS_TO_MMI(vfsp)->mmi_svr.host));
+                mvfs_log(MFS_LOG_ERR,
+                         "error in the config specification for view %s\n",
+                         mfs_vw2nm(vw));
+                mvfs_log(MFS_LOG_ERR,
+                         "see the vobrpc_server_log on host %s for details\n",
+                         VFS_TO_MMI(vfsp)->mmi_svr.host);
+                UPRINTF(("mvfs: error in the configuration specification for "
+                         "view %s\n"
+                         "see the vobrpc_server_log on host %s for details\n",
+                         mfs_vw2nm(vw),
+                         VFS_TO_MMI(vfsp)->mmi_svr.host));
                 break;
 
               case TBS_ST_RPC_STALE:
@@ -1296,16 +1496,18 @@ print_error:
                  */
                 if (user_error == EIO) {
                     mvfs_log(MFS_LOG_ERR, "view=%s vob=%s%s\n",
-                                mfs_vw2nm(vw),
-                                VFS_TO_MMI(vfsp)->mmi_mntpath,
-                                mfs_strerr(status));
-                    mvfs_log(MFS_LOG_ERR, "see view log on host %s for more info\n", 
-                                alloc_unitp->mnp->mn_view.svr.host);
-                    UPRINTF(("mvfs: ERROR: view=%s vob=%s%s\nsee view_log on host %s for more info\n",
-                        mfs_vw2nm(vw),
-                        VFS_TO_MMI(vfsp)->mmi_mntpath,
-                        mfs_strerr(status),
-                        alloc_unitp->mnp->mn_view.svr.host));
+                             mfs_vw2nm(vw),
+                             VFS_TO_MMI(vfsp)->mmi_mntpath,
+                             mfs_strerr(status));
+                    mvfs_log(MFS_LOG_ERR,
+                             "see view log on host %s for more info\n",
+                             alloc_unitp->mnp->mn_view.svr.host);
+                    UPRINTF(("mvfs: ERROR: view=%s vob=%s%s\n"
+                             "see view_log on host %s for more info\n",
+                             mfs_vw2nm(vw),
+                             VFS_TO_MMI(vfsp)->mmi_mntpath,
+                             mfs_strerr(status),
+                             alloc_unitp->mnp->mn_view.svr.host));
                 }
                 break;
             } /* switch */
@@ -1332,7 +1534,7 @@ print_error:
 }
 
 /*
- * MFSCALL - make an MFS rpc call 
+ * MFSCALL - make an MFS rpc call
  */
 int
 mfscall(
@@ -1352,16 +1554,17 @@ mfscall(
     CLIENT *client;
     int error;
     XID_T xid;
+    enum clnt_stat rpc_status = RPC_SUCCESS;
 
     ASSERT(ixid == 0); /* must allow us to allocate the xid */
-    
+
     error = mvfs_clnt_get(trait, svr, rinfo, cred, view, &client);
     if (error != 0)
         return error;
     xid = (XID_T)MDKI_ALLOC_XID();
 
     error = mfscall_int(trait, op, &xid, svr, rinfo, xdrargs, argsp,
-                        xdrres, resp, cred, client, view);
+                        xdrres, resp, cred, client, view, &rpc_status);
     mvfs_clnt_free(client, error, view);
     return(error);
 
@@ -1383,10 +1586,10 @@ mfscall_int(
     void *resp,
     CRED_T *cred,
     CLIENT *client,
-    VNODE_T *view
+    VNODE_T *view,
+    enum clnt_stat *status
 )
 {
-    enum clnt_stat status;
     struct timeval wait;
     int rpctimeout;
     int error, remote_error;
@@ -1407,7 +1610,7 @@ mfscall_int(
 
     MFS_CHKSP(STK_CLNTCALL);
 
-    /* If the trait or svr is NULL (no server) 
+    /* If the trait or svr is NULL (no server)
         just croak and return an error */
 
     if (trait == NULL || svr == NULL) return(ECONNREFUSED);
@@ -1424,7 +1627,8 @@ mfscall_int(
     /* DEBUG: verify that opnames for trait are up to date */
 
     if (trait->opnames[op] == NULL) {
-        mvfs_log(MFS_LOG_DEBUG, "mfscall: no name for operation %d\n", op);
+        mvfs_log(MFS_LOG_DEBUG, "mfscall_int: no name for op=%d proto=%lu\n",
+                 op, trait->proto);
     }
 #endif
 
@@ -1444,7 +1648,7 @@ mfscall_int(
 
     /*
      * MAIN retry loop.  Do to the fact that someone
-     * may have rebound the address in the view, we must 
+     * may have rebound the address in the view, we must
      * free/re-acquire the client handle on each retry attempt
      * for hard mounts.
      */
@@ -1479,17 +1683,17 @@ retry_call:
      * boottime is included so that the server can detect when a
      * node has been rebooted, and not discard new requests.
      * boottime is also useful for some mutant OSes that use one UDP
-     * port for all CLIENT handles since it can serve as a differentiator 
-     * between the handles to avoid unnecessary view_server RPC rejections 
+     * port for all CLIENT handles since it can serve as a differentiator
+     * between the handles to avoid unnecessary view_server RPC rejections
      * (as long as those OSes provide a mechanism to generate unique numbers
-     * rather than a fixed time).  We want the view server to be able to 
-     * detect real network errors (packet delay/duplication/reordering) 
+     * rather than a fixed time).  We want the view server to be able to
+     * detect real network errors (packet delay/duplication/reordering)
      * within the stream generated by a single CLIENT handle, so we use the
-     * same boottime value for all uses of a particular CLIENT.  
+     * same boottime value for all uses of a particular CLIENT.
      *
-     * The boottime value returned by mvfs_get_boottime() is the same until 
-     * XID wraps around.  Hence, all CLIENTs have the same boottime, but 
-     * different UDP source ports.  Once XID wraps around, mvfs_boottime is 
+     * The boottime value returned by mvfs_get_boottime() is the same until
+     * XID wraps around.  Hence, all CLIENTs have the same boottime, but
+     * different UDP source ports.  Once XID wraps around, mvfs_boottime is
      * updated and mvfs_get_boottime() returns the updated value.  Mutant
      * OSes have a single UDP source port and distinct boottimes per
      * CLIENT.
@@ -1506,7 +1710,7 @@ retry_call:
     /* Get start time for real-time stats */
     MDKI_HRTIME(&(alloc_unitp->start_time));
 
-    /* 
+    /*
      * Do the call.  CLNT_CALL will do one set of retries according
      * to the values in the client handle.
      */
@@ -1515,31 +1719,30 @@ retry_call:
 
     ASSERT(cred);
     MDKI_CLNT_CALL(client, op, xdrargs, argsp, xdrres, resp, wait, rpctimeout,
-                            &saved_holdmask, !(rinfo->nointr), cred, status);
+                   &saved_holdmask, !(rinfo->nointr), cred, *status);
     BUMPSTAT(mfs_clntstat.clntcalls);
     if (view) {
         BUMPVSTATV(view, clntstat.clntcalls);
     }
     /* Parse RPC return status */
 
-    switch (status) {
+    switch (*status) {
 
-    case RPC_SUCCESS: 
-        /* Print a message if reply XID not match call XID */
-        if (resp) {
-            if ((*trait->get_xid)(resp) != xid) {
-            mvfs_log(MFS_LOG_INFO, 
+      case RPC_SUCCESS:
+        /* Print a message if reply XID does not match call XID */
+        if ((resp != NULL) && ((*trait->get_xid)(resp) != xid)) {
+            mvfs_log(MFS_LOG_INFO,
                      "%s op %s xid mismatch: resp %lx, rqst %lx\n",
                      trait->svrname,
-                     trait->opnames[(int)op] ? trait->opnames[(int)op] : "unknown operation", 
+                     trait->opnames[(int)op] ?
+                         trait->opnames[(int)op] : "unknown operation",
                      (*trait->get_xid)(resp), xid);
-            }
         }
 
-        /* 
-         * Compute time used on calls to a view_server.  
+        /*
+         * Compute time used on calls to a view_server.
          * Accumulate statistics and print
-         * a message if too much time for this call. 
+         * a message if too much time for this call.
          */
 
         if (trait == &mfs_vwcallstruct) {
@@ -1553,14 +1756,16 @@ retry_call:
                          mfs_viewoptime[op]);
             if (alloc_unitp->dtime.tv_sec > mvfs_max_rpcdelay) {
                 mvfs_log(MFS_LOG_INFO,
-                    "View op %s delayed %d seconds!\n",
-                    (trait->opnames)[(int)op] ? (trait->opnames)[(int)op]
-                         : "unknown operation", 
-                     (int)(alloc_unitp->dtime.tv_sec));
+                         "View op %s delayed %d seconds!\n",
+                         (trait->opnames)[(int)op] ?
+                             (trait->opnames)[(int)op] : "unknown operation",
+                         (int)(alloc_unitp->dtime.tv_sec));
             /* Update max delay stats per-cpu and per-view. */
                 SETSTAT_MAX_DELAY((MVFS_STAT_CNT_T)alloc_unitp->dtime.tv_sec);
                 if (view) {
-                     SETPVSTAT_MAX_DELAY(view, (MVFS_STAT_CNT_T)alloc_unitp->dtime.tv_sec);
+                     SETPVSTAT_MAX_DELAY(
+                         view,
+                         (MVFS_STAT_CNT_T)alloc_unitp->dtime.tv_sec);
                 }
             }
             if (trait == &mfs_vwcallstruct) {
@@ -1574,7 +1779,7 @@ retry_call:
                 }
             }
         }
-        
+
         break;
 
     /*
@@ -1593,7 +1798,7 @@ retry_call:
             goto errout;
         }
         /* Fall through */
-        
+
     /*
      * Unrecoverable errors: give up immediately
      */
@@ -1612,7 +1817,7 @@ retry_call:
                    /* ECOMM is not defined for the hp400. */
         break;
 
-    case RPC_INTR:	
+    case RPC_INTR:
         BUMPSTAT(mfs_clntstat.mfsintr);
         if (view) {
             BUMPVSTATV(view, clntstat.mfsintr);
@@ -1620,12 +1825,12 @@ retry_call:
         error = EINTR;
         break;
 
-    case RPC_TIMEDOUT: 
+    case RPC_TIMEDOUT:
         error = ETIMEDOUT;
         /* Fall through */
 
     default:
-        if (!rinfo->soft || (rinfo->rebind && status == RPC_TIMEDOUT)) {
+        if (!rinfo->soft || (rinfo->rebind && *status == RPC_TIMEDOUT)) {
             if (!svr->dprinted) {
                 svr->dprinted = 1;
                 mvfs_log(MFS_LOG_WARN,
@@ -1633,10 +1838,12 @@ retry_call:
                          "(st=%d er=%d soft=%d rebind=%d)\n",
                          trait->svrname, svr->host,
                          MFS_STRBUFPN_PAIR_GET_UPN(&svr->lpn).s,
-                         status, error, rinfo->soft, rinfo->rebind);
-                UPRINTF(("%s server for %s:%s not responding still trying (st=%d er=%d)\n",
-                         trait->svrname, svr->host, MFS_STRBUFPN_PAIR_GET_UPN(&svr->lpn).s,
-                         status, error));
+                         *status, error, rinfo->soft, rinfo->rebind);
+                UPRINTF(("%s server for %s:%s not responding still trying "
+                         "(st=%d er=%d)\n",
+                         trait->svrname, svr->host,
+                         MFS_STRBUFPN_PAIR_GET_UPN(&svr->lpn).s,
+                         *status, error));
             }
             BUMPSTAT(mfs_clntstat.clntretries);
             if (view) {
@@ -1647,7 +1854,7 @@ retry_call:
              * on a timeout.  Use a funky unique error e.g. EAGAIN!
              * Update the retry structure with timeout backoff!
              */
-            if (status == RPC_TIMEDOUT && rinfo->rebind) {
+            if (*status == RPC_TIMEDOUT && rinfo->rebind) {
                 rinfo->timeo = BACKOFF(rpctimeout);
                 error = EAGAIN;
                 goto errout;
@@ -1661,7 +1868,8 @@ retry_call:
                 /* We should find a way to ASSERT the client handle's
                    proto/version match the requested traits */
                 error = MDKI_CLNTKUDP_INIT(client, &svr->addr.ks_ss_s, retrans,
-                                           cred, (!rinfo->nointr), &alloc_unitp->addr, 
+                                           cred, (!rinfo->nointr),
+                                           &alloc_unitp->addr,
                                            trait->proto, trait->version,
                                            &svr->knc);
                 if (error != 0) {
@@ -1676,24 +1884,28 @@ retry_call:
 
     /* On errors, print a message about the problem */
 
-    if (status != RPC_SUCCESS) {
+    if (*status != RPC_SUCCESS) {
         MDKI_CLNT_GETERR(client, &alloc_unitp->rpcerr);
         if (!error) error = alloc_unitp->rpcerr.re_errno;	/* Use remote error */
         /* Don't print a message if interrupted. */
-        if (status != RPC_INTR) {
-            if (status == RPC_PROCUNAVAIL) {
+        if (*status != RPC_INTR) {
+            if (*status == RPC_PROCUNAVAIL) {
                 mvfs_log(MFS_LOG_DEBUG, "Incompatible %s server on %s?\n",
-                            trait->svrname, svr->host);
+                         trait->svrname, svr->host);
             } else {
                 svr->down = 1;
-                mvfs_log(MFS_LOG_ERR, "%s op %s failed for %s:%s -  %s\n", 
-                            trait->svrname,
-                            (trait->opnames)[(int)op] ? (trait->opnames)[(int)op] : "unknown operation", 
-                            svr->host, MFS_STRBUFPN_PAIR_GET_UPN(&svr->lpn).s, MDKI_CLNT_SPERRNO(status));
-                UPRINTF(("%s op %s failed for %s:%s - %s\n", 
-                            trait->svrname,
-                            (trait->opnames)[(int)op] ? (trait->opnames)[(int)op] : "unknown operation",
-                            svr->host, MFS_STRBUFPN_PAIR_GET_UPN(&svr->lpn).s, MDKI_CLNT_SPERRNO(status)));
+                mvfs_log(MFS_LOG_ERR, "%s op %s failed for %s:%s -  %s\n",
+                         trait->svrname,
+                         (trait->opnames)[(int)op] ?
+                             (trait->opnames)[(int)op] : "unknown operation",
+                         svr->host, MFS_STRBUFPN_PAIR_GET_UPN(&svr->lpn).s,
+                         MDKI_CLNT_SPERRNO(*status));
+                UPRINTF(("%s op %s failed for %s:%s - %s\n",
+                         trait->svrname,
+                         (trait->opnames)[(int)op] ?
+                             (trait->opnames)[(int)op] : "unknown operation",
+                         svr->host, MFS_STRBUFPN_PAIR_GET_UPN(&svr->lpn).s,
+                         MDKI_CLNT_SPERRNO(*status)));
             }
         }
 
@@ -1701,15 +1913,17 @@ retry_call:
 
     } else {
         if (svr->dprinted) {
-            mvfs_log(MFS_LOG_WARN, "%s server for %s:%s ok\n", 
-                        trait->svrname, svr->host, MFS_STRBUFPN_PAIR_GET_UPN(&svr->lpn).s);
-            UPRINTF(("%s server for %s:%s ok\n", 
-                        trait->svrname, svr->host, MFS_STRBUFPN_PAIR_GET_UPN(&svr->lpn).s));
+            mvfs_log(MFS_LOG_WARN, "%s server for %s:%s ok\n",
+                     trait->svrname, svr->host,
+                     MFS_STRBUFPN_PAIR_GET_UPN(&svr->lpn).s);
+            UPRINTF(("%s server for %s:%s ok\n",
+                     trait->svrname, svr->host,
+                     MFS_STRBUFPN_PAIR_GET_UPN(&svr->lpn).s));
             svr->dprinted = 0;
         }
         svr->down = 0;
 
-        /* 
+        /*
          * I think this is the same kludge as NFS has for setuid-root
          * programs.  Since "root" is turned into "nobody" across
          * the net (untrusted root), then someone running a setuid root
@@ -1720,18 +1934,22 @@ retry_call:
          * easier if sunrpc just passed both real and effective and let
          * the server decide ....
          */
-        if (resp && MDKI_CR_IS_SETUID_ROOT(cred) && alloc_unitp->ruid_cred == NULL && 
-                ((remote_error = mfs_geterrno((*(trait->get_status))(resp))) 
-                                                        == EACCES ||
-                  remote_error == EPERM))
+        if (resp &&
+            MDKI_CR_IS_SETUID_ROOT(cred) &&
+            alloc_unitp->ruid_cred == NULL &&
+            ((remote_error =
+              mfs_geterrno((*(trait->get_status))(resp))) == EACCES ||
+             remote_error == EPERM))
         {
-            mvfs_log(MFS_LOG_DEBUG, "mfscall: retrying setuid root: cmd %s op %s\n", 
+            mvfs_log(MFS_LOG_DEBUG,
+                     "mfscall: retrying setuid root: cmd %s op %s\n",
                      MDKI_GET_U_COMM_PTR(),
-                     (trait->opnames)[(int)op]? (trait->opnames)[(int)op] : "unknown operation");
+                     (trait->opnames)[(int)op] ?
+                         (trait->opnames)[(int)op] : "unknown operation");
             alloc_unitp->ruid_cred = MDKI_CRDUP(cred);
-            MDKI_CR_SET_E2RUID(alloc_unitp->ruid_cred); 
+            MDKI_CR_SET_E2RUID(alloc_unitp->ruid_cred);
             /* Overwrite local var to make retry easier.  Ruid_cred flags
-             * if there is a credential we must free 
+             * if there is a credential we must free
              */
             /* POSIX creds in this case, check MDKI_CR_IS_SETUID_ROOT in mdep */
             cred = alloc_unitp->ruid_cred; /* POSIX creds only */
@@ -1741,8 +1959,9 @@ retry_call:
             MDKI_CLNTKUDP_FREE(client);
             /* We should find a way to ASSERT the client handle's proto/version
                match the requested traits */
-            error = MDKI_CLNTKUDP_INIT(client, &svr->addr.ks_ss_s, retrans, cred,
-                                       (!rinfo->nointr), &alloc_unitp->addr, trait->proto,
+            error = MDKI_CLNTKUDP_INIT(client, &svr->addr.ks_ss_s, retrans,
+                                       cred, (!rinfo->nointr),
+                                       &alloc_unitp->addr, trait->proto,
                                        trait->version, &svr->knc);
             if (error != 0) {
                 goto errout;
@@ -1765,4 +1984,4 @@ errout:
     KMEM_FREE(alloc_unitp, sizeof(*alloc_unitp));
     return (error);
 }
-static const char vnode_verid_mvfs_rpcutl_c[] = "$Id:  cd5cedc8.1fb911e2.96af.00:01:84:c3:8a:52 $";
+static const char vnode_verid_mvfs_rpcutl_c[] = "$Id:  f0a0d462.1f9c11e2.8cfc.00:01:83:9c:f6:11 $";

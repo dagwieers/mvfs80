@@ -1,4 +1,4 @@
-/* * (C) Copyright IBM Corporation 1991, 2009. */
+/* * (C) Copyright IBM Corporation 1991, 2012. */
 /*
  This program is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License as published by
@@ -42,9 +42,9 @@
  */
 #define TBS_RATIONAL_RELEASE_GROUP      "8"
 #define TBS_RATIONAL_RELEASE_MAJOR      "0"
-#define TBS_RATIONAL_RELEASE_MINOR      "0"
+#define TBS_RATIONAL_RELEASE_MINOR      "1"
 /* Increment RELEASE_BUILD for patches.  Should be '0' for GA release */
-#define TBS_RATIONAL_RELEASE_BUILD      "6"
+#define TBS_RATIONAL_RELEASE_BUILD      "0"
 #define TBS_RATIONAL_RELEASE_BU         ""
 
 /*
@@ -63,4 +63,4 @@
 #define TBS_VER_MAJOR_ID  TBS_RATIONAL_FCC_PRODUCT_ID
 
 #endif /* _TBS_MAJOR_VER_STR_H_ */
-/* $Id: 78077136.29e611e2.8380.00:01:76:29:02:20 $ */
+/* $Id: ba64afe1.698411e2.8796.00:01:84:c3:8a:52 $ */

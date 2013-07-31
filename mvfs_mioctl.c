@@ -1,4 +1,4 @@
-/* * (C) Copyright IBM Corporation 1991, 2012. */
+/* * (C) Copyright IBM Corporation 1991, 2013. */
 /*
  This program is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License as published by
@@ -119,6 +119,7 @@ mvfs_ioinval(
 STATIC int
 mvfs_mkviewtag(
     mvfscmd_block_t *data,
+    mvfs_mkviewtag_info_ex_t *vtp_ex,
     CRED_T *cred,
     MVFS_CALLER_INFO *callinfo
 );
@@ -326,6 +327,12 @@ mvfs_addup_rlstat(
 
 STATIC void
 mvfs_addup_austat(
+    mvfs_stats_data_t *sdp,
+    mvfs_stats_data_t *total_sdp
+);
+
+STATIC void
+mvfs_addup_eacstat(
     mvfs_stats_data_t *sdp,
     mvfs_stats_data_t *total_sdp
 );
@@ -787,6 +794,22 @@ mvfs_do_inval(
 	error = 0;
 	break;
 
+    case MVFS_INV_ROLEMAP:
+        error = mfs_clnt_inval(vp, VIEW_INVALIDATE_TYPE_ROLEMAP,
+                               replica_oid_p, &invp->obj_oid, NULL,
+                               MVFS_VIEW_CREDS(vp, cd, FALSE));
+
+        mvfs_acl_inval_oid(VOB_MTYPE_ROLEMAP, &invp->obj_oid);
+        break;
+
+    case MVFS_INV_POLICY:
+        error = mfs_clnt_inval(vp, VIEW_INVALIDATE_TYPE_POLICY,
+                               replica_oid_p, &invp->obj_oid, NULL,
+                               MVFS_VIEW_CREDS(vp, cd, FALSE));
+
+        mvfs_acl_inval_oid(VOB_MTYPE_POLICY, &invp->obj_oid);
+        break;
+
     case MVFS_INV_OBJ:
     case MVFS_INV_ELEM:
 	error = mfs_clnt_inval(vp, VIEW_INVALIDATE_TYPE_OBJ,
@@ -921,7 +944,6 @@ mvfs_mioctl(
     u_long mvfs_data;
     mvfs_viewroot_data_t *vrdp = MDKI_VIEWROOT_GET_DATAP();
     mvfs_common_data_t *mcdp = MDKI_COMMON_GET_DATAP();
-    MVFS_CALLER_CONTEXT_T *ct;
 
     /*
      * Fill in initial status
@@ -1006,7 +1028,46 @@ mvfs_mioctl(
 	 */
 
 	case MVFS_CMD_MKVIEWTAG: {
-            error = mvfs_mkviewtag(data, MVFS_CD2CRED(cd), callinfo);
+            mvfs_mkviewtag_info_t *vtp = NULL;
+            mvfs_mkviewtag_info_ex_t *vtp_ex = NULL;
+
+            /* We have two mkviewtag ioctls (although one is Windows only for
+            ** now).  They use two structs, but the mkviewtag one is a subset of
+            ** the mkviewtag_ex one (the net_path field is added), so make them
+            ** common here so the mvfs_mkviewtag code can be common as well.
+            */
+            if ((vtp_ex = KMEM_ALLOC(sizeof(*vtp_ex), KM_SLEEP)) == NULL) {
+                error = ENOMEM;
+                goto MVFS_CMD_MKVIEWTAG_cleanup;
+            }
+            if ((vtp = KMEM_ALLOC(sizeof(*vtp), KM_SLEEP)) == NULL) {
+                error = ENOMEM;
+                goto MVFS_CMD_MKVIEWTAG_cleanup;
+            }
+            if ((error =
+                 CopyInMvfs_mkviewtag_info(data->infop, vtp, callinfo)) != 0)
+            {
+                goto MVFS_CMD_MKVIEWTAG_cleanup;
+            }
+            vtp_ex->viewtag = vtp->viewtag;
+            vtp_ex->spath = vtp->spath;
+            vtp_ex->host = vtp->host;
+            vtp_ex->rpath = vtp->rpath;
+            MFS_INIT_STRBUFPN(&(vtp_ex->net_path)); /* The added field. */
+            vtp_ex->uuid = vtp->uuid;
+            vtp_ex->addr = vtp->addr;
+            vtp_ex->windows_view = vtp->windows_view;
+            vtp_ex->pad = vtp->pad;
+
+            error = mvfs_mkviewtag(data, vtp_ex, MVFS_CD2CRED(cd), callinfo);
+
+          MVFS_CMD_MKVIEWTAG_cleanup:
+            if (vtp != NULL) {
+                KMEM_FREE(vtp, sizeof(*vtp));
+            }
+            if (vtp_ex != NULL) {
+                KMEM_FREE(vtp_ex, sizeof(*vtp_ex));
+            }
             break;
         }
 
@@ -1064,9 +1125,11 @@ mvfs_mioctl(
 	case MVFS_CMD_STOP_AUDIT:
 	case MVFS_CMD_SYNC_AUDIT:
 	case MVFS_CMD_REVALIDATE:
-	case MVFS_CMD_AUDIT_MARKER:
+        case MVFS_CMD_AUDIT_MARKER: {
 	    error = mfs_auditioctl(data, cd, callinfo);
 	    break;
+        }
+
 	case MVFS_CMD_GET_VXSUFFIX: {
 	    if ((error = CopyInMfs_strbuf(data->infop, 
                                           &strbuf_data, callinfo)) != 0)
@@ -1082,7 +1145,6 @@ mvfs_mioctl(
 	    mfs_findvfs_unlock();       
 	    error = CopyOutMfs_strbuf(&strbuf_data, data->infop, callinfo);
 	    break;
-
 	}
 
 	case MVFS_CMD_GET_VIEWTAG_DIR: {
@@ -1092,7 +1154,6 @@ mvfs_mioctl(
 	/*
 	 *  Cache enable / flush operations
          */
-
  	case MVFS_CMD_GET_CACHE_ENB: {
 	    ulp = &mvfs_data;
 	    *ulp = 0;
@@ -1116,7 +1177,8 @@ mvfs_mioctl(
 		break;
 	    }
 
-	    if ((error = CopyInMvfs_u_long((caddr_t)(data->infop), ulp, callinfo)) != 0)
+	    if ((error = CopyInMvfs_u_long((caddr_t)(data->infop), ulp,
+                                           callinfo)) != 0)
 	        break;
 
 	    mcdp->mvfs_acenabled = (*ulp & MVFS_CE_ATTR) ? 1 : 0;
@@ -1132,7 +1194,8 @@ mvfs_mioctl(
 
 	case MVFS_CMD_FLUSH_CACHE: {
 	    ulp = &mvfs_data;
-            if ((error = CopyInMvfs_u_long((caddr_t)(data->infop), ulp, callinfo)) != 0)
+            if ((error = CopyInMvfs_u_long((caddr_t)(data->infop), ulp,
+                                           callinfo)) != 0)
 	        break;
 
 	    /* Allow anyone to flush caches (they can already via
@@ -1163,6 +1226,7 @@ mvfs_mioctl(
 	    error = CopyOutMfs_strbuf(&strbuf_data, data->infop, callinfo);
 	    break;
 	}
+
 	case MVFS_CMD_GET_SCCSID: {
 	    if ((error = CopyInMfs_strbuf(data->infop, 
                                           &strbuf_data, callinfo)) != 0)
@@ -1188,7 +1252,7 @@ mvfs_mioctl(
 	    break;
 	}
 
-    case MVFS_CMD_GET_STATS: {
+        case MVFS_CMD_GET_STATS: {
             error = mvfs_get_stats(data, callinfo);
 	    break;
   	}
@@ -1224,30 +1288,37 @@ mvfs_mioctl(
             error = mvfs_zero_stats(MVFS_CD2CRED(cd));
 	    break;
 	}
+
 	case MVFS_CMD_GET_CACHE_USAGE: {
             error = mvfs_get_cache_usage(data, callinfo);
 	    break;
 	}
+
 	case MVFS_CMD_SET_CACHE_SIZES: {
             error = mvfs_set_cache_sizes(data, MVFS_CD2CRED(cd), callinfo);
 	    break;
 	}
+
 	case MVFS_CMD_GET_CACHE_SIZES: {
             error = mvfs_get_cache_sizes(data, callinfo);
 	    break;
 	}
+
 	case MVFS_CMD_COMPUTE_CACHE_DEFAULTS: {
             error = mvfs_compute_cache_defaults(data, callinfo);
 	    break;
 	}
+
 	case MVFS_CMD_GET_VIEW_STATS: {
             error = mvfs_get_view_stats(data, MVFS_CD2CRED(cd), callinfo);
             break;
 	}
+
 	case MVFS_CMD_ZERO_VIEW_STATS: {
             error = mvfs_zero_view_stats(data, MVFS_CD2CRED(cd), callinfo);
             break;
 	}
+
 	case MVFS_CMD_SIDHOST_CREDMAPPING: {
             error = mvfs_sidhost_credmapping(data, callinfo);
 	    break;
@@ -1259,9 +1330,9 @@ mvfs_mioctl(
 	}
 
         case MVFS_CMD_GET_GFSINFO: {
-             error = mvfs_get_gfsinfo(data, callinfo);
-           break;
-       }
+            error = mvfs_get_gfsinfo(data, callinfo);
+            break;
+        }
 
 	case MVFS_CMD_SET_VOBRT_VFSMNT: {
             error = mvfs_set_vobrt_vfsmnt(data, callinfo);
@@ -1275,8 +1346,9 @@ mvfs_mioctl(
 
     /* shove the real error into status */
     if ((error != 0) && (error != -1)) {
-	if (data->status == TBS_ST_OK)
+	if (data->status == TBS_ST_OK) {
 	    data->status = tbs_errno2status(error);
+        }
 	error = -1; /* general indication */
     }
 
@@ -1619,6 +1691,8 @@ mvfs_xstat(
 	vstatp->elem_oid = mnp->mn_vob.attr.elem_oid;
 	vstatp->obj_oid  = mnp->mn_vob.attr.obj_oid;
 	vstatp->event_time = mnp->mn_vob.attr.event_time;
+	vstatp->rolemap_oid  = mnp->mn_vob.attr.rolemap_oid;
+	vstatp->eacl_mtime = mnp->mn_vob.attr.eacl_mtime;
         xstat.vob_oid = V_TO_MMI(vp)->mmi_voboid;
 	xstat.replica_uuid = V_TO_MMI(vp)->mmi_vobuuid;
         if (MFS_VIEW(vp)) {
@@ -1848,32 +1922,31 @@ mvfs_ioinval(
 
     return(error);
 }
-/* 
- * UNIX version of mkviewtag 
- */
 STATIC int MVFS_NOINLINE
 mvfs_mkviewtag(
     mvfscmd_block_t *data,
+    mvfs_mkviewtag_info_ex_t *vtp_ex,
     CRED_T *cred,
     MVFS_CALLER_INFO *callinfo
 )
 {
     int  error = 0;
-    mvfs_mkviewtag_info_t *vtp;
     VNODE_T *vw = NULL;
     VNODE_T *dvp = NULL;
     char *rpn = NULL;
+    char *net_pn = NULL;
     char *host = NULL;
     char *tagn = NULL;
     CRED_T *vwcreds = NULL;
-    void *attp = NULL;
+    tbs_boolean_t spath_copied_in = FALSE; /* Needed for cleanup. */
     mfs_mnode_t *mnp;
     /* Declare a type so we can do one allocation to save stack space. */
     struct {
         struct mfs_svr svr;
-    } *alloc_unitp;
+    } *alloc_unitp = NULL;
     struct mfs_svr *svrp;
     mvfs_viewroot_data_t *vrdp = MDKI_VIEWROOT_GET_DATAP();
+    tbs_status_t status = TBS_ST_OK;
 
     /* Allocate stuff to keep the stack size down. */
     if ((alloc_unitp = KMEM_ALLOC(sizeof(*alloc_unitp), KM_SLEEP)) == NULL) {
@@ -1881,23 +1954,15 @@ mvfs_mkviewtag(
     }
     svrp = &(alloc_unitp->svr);
 
-    if ((vtp = KMEM_ALLOC(sizeof(*vtp), KM_SLEEP)) == NULL) {
-        error = ENOMEM;
-        goto cleanup;
-    }
-    if ((error = CopyInMvfs_mkviewtag_info(data->infop, vtp, callinfo)) != 0) {
-        goto cleanup;
-    }
     data->status = TBS_ST_OK;
-
     /* 
-     * Check to see if the new addr that was passed in via
-     * the ioctl can actually be contacted, before assuming
-     * that it is valid. Use a null RPC to the view 
-     * server at that address to do so.
+     * Check to see if the new addr that was passed in via the ioctl can
+     * actually be contacted before assuming that it is valid.  Use a contact
+     * RPC to the view server at that address to do so.  That way we can also
+     * learn the server version so we can tell what functions it supports.
      */
     BZERO(svrp, sizeof(*svrp));
-    svrp->addr = vtp->addr;
+    svrp->addr = vtp_ex->addr;
     svrp->down = 0;
     svrp->svrbound = 1;
     if ((error = mvfs_clnt_ping_server(svrp, cred)) != 0) {
@@ -1905,174 +1970,184 @@ mvfs_mkviewtag(
                  error);
         goto cleanup;
     }
-
     /* Get parameters */
-
-    if ((error = mfs_copyin_strbuf(vtp->viewtag, &tagn)) != 0) {
+    if ((error = mfs_copyin_strbuf(vtp_ex->viewtag, &tagn)) != 0) {
         goto cleanup;
     }
-
     /* We must prevent of history mode sufix being part of the view name */
     if (mfs_hmname(tagn, NULL)){
         error = EINVAL;
         goto cleanup;
     }
-
     /* We are going to use the pathname strings, so copy them in.  The
-    ** CopyInMvfs_mkviewtag_info above already did the equivalent of
-    ** CopyInMfs_strbufpn_pair since mkviewtag_info.spath is a
+    ** CopyInMvfs_mkviewtag_info_ex above already did the equivalent of
+    ** CopyInMfs_strbufpn_pair since mkviewtag_info_ex.spath is a
     ** mfs_strbufpn_pair_t.
     */
-    MFS_STRBUFPN_PAIR_COPYIN_STRS(&(vtp->spath), error);
+    MFS_STRBUFPN_PAIR_COPYIN_STRS(&(vtp_ex->spath), error);
     if (error != 0) {
-        PNPAIR_STRFREE(&(vtp->spath));
         goto cleanup;
     }
-    /* Get the view server hostname and remote view storage pathname. */
-    if ((error = mfs_copyin_strbuf(vtp->host, &host)) == 0) {
-        error = mfs_copyin_strbufpn(vtp->rpath, &rpn);
-    }
-    if (error != 0)  {
-        PNPAIR_STRFREE(&(vtp->spath));
-        if (host != NULL)
-            HN_STRFREE(host);
-        goto cleanup;
-    }
+    spath_copied_in = TRUE;
 
-    /* We need to prevent an add/add race, as that will result in user-space
-     * code getting EEXIST and believing the directory needs to be
-     * removed/recreated, which in a thundering herd problem results in
-     * spurious errors.
-     */
-    MVFS_LOCK(&(vrdp->mvfs_mkviewtag_lock));
-
-    /* See if existing view-tag */
-    if ((error = mfs_viewtaglookup(tagn, &vw, cred)) == 0) {
-        mnp = VTOM(vw);
-        ASSERT(MFS_ISVIEW(mnp));
-        MLOCK(mnp);
-        /* 
-         * See if all setup OK already
-         * This compare is always case-sensitive 
+    /* Get the view server hostname, remote view storage pathname, and maybe the
+    ** network pathname.  Differentiate between the mkviewtag and mkviewtag_ex
+    ** ioctls based on whether or not the net_path is filled in.
+    */
+    if (((error = mfs_copyin_strbuf(vtp_ex->host, &host)) == 0) &&
+        ((error = mfs_copyin_strbufpn(vtp_ex->rpath, &rpn)) == 0) &&
+        (vtp_ex->net_path.s == NULL || 
+         (error = mfs_copyin_strbufpn(vtp_ex->net_path, &net_pn)) == 0))
+    {
+        /* We need to prevent an add/add race, as that will result in user-space
+         * code getting EEXIST and believing the directory needs to be
+         * removed/recreated, which in a thundering herd problem results in spurious
+         * errors.
          */
-        if (PN_STRCMP(FALSE,
-                      MFS_STRBUFPN_PAIR_GET_KPN(&mnp->mn_view.svr.lpn).s,
-                      MFS_STRBUFPN_PAIR_GET_KPN(&(vtp->spath)).s) == 0 &&
-            HN_STRCMP(mnp->mn_view.svr.host, host) == 0 &&
-            PN_STRCMP(FALSE, mnp->mn_view.svr.rpn, rpn) == 0 &&
-            MFS_UUIDEQ(mnp->mn_view.svr.uuid, vtp->uuid))
-        {
-            /* Always fix with latest address */
-            mnp->mn_view.svr.addr = vtp->addr;
-            mnp->mn_view.svr.svrbound = 1;  /* Reset flags */
-            mnp->mn_view.svr.dprinted = 0;
-            mnp->mn_view.svr.uprinted = 0;
-            data->status = TBS_ST_OK;
-        } else {
-            /* 
-             * Exists, but not same info, give EEXIST error
-             */
-            data->status = TBS_ST_EEXIST;
-        }
-        MUNLOCK(mnp);
-        mvfs_rvcflush(vw, NULL); /* Flush root version cache */
-        if (vw) VN_RELE(vw);
-    } else {
-        /* Look to see if some process might still be attached to
-         * it (but the tag was removed by another process). If so,
-         * resurrect it.
-         */
-        error = mvfs_viewuuidrecover(tagn, 
-                                     &vtp->uuid, host, &(vtp->spath),
-                                     rpn, &vw, cred);
-        switch (error) {
-          case 0:
-            mnp = VTOM(vw);
-            MLOCK(mnp);
-            mnp->mn_view.svr.addr = vtp->addr;
-            mnp->mn_view.svr.svrbound = 1;  /* Reset flags */
-            mnp->mn_view.svr.dprinted = 0;
-            mnp->mn_view.svr.uprinted = 0;
-            data->status = TBS_ST_OK;
-            MUNLOCK(mnp);
-            mvfs_rvcflush(vw, NULL);	/* Flush root version cache */
-            VN_RELE(vw);
-            goto out;
+        MVFS_LOCK(&(vrdp->mvfs_mkviewtag_lock));
 
-          default:
-            /* some problem reattaching; return this error */
-            data->status = tbs_errno2status(error);
-            error = 0;
-            goto out;
-
-          case ENOENT:
-            /* not found to reattach, let's do the hard work */
-            break;
-        }
-        /* Doesn't exist... try to create it */
-        dvp = mfs_getviewroot();   /* View root vnode ptr */
-        if (dvp == NULL) {
-            data->status = TBS_ST_MFS_ERR;
-            error = 0;
-            /* Make the view-tag */
-        } else if ((error = mfs_viewdirmkdir(dvp, tagn, NULL, &vw, cred, host, FALSE)) != 0) {
-            data->status = tbs_errno2status(error);
-            error = 0;
-        } else {
-            ASSERT(vw != NULL);
+        /* See if existing view-tag */
+        if ((error = mfs_viewtaglookup(tagn, &vw, cred)) == 0) {
             mnp = VTOM(vw);
             ASSERT(MFS_ISVIEW(mnp));
+            MLOCK(mnp);
             /* 
-             * Move string ptrs into viewtag.  Null out the local ptrs so they
-             * are not freed on cleanup below.
+             * See if all setup OK already
+             * This compare is always case-sensitive 
              */
-            MLOCK(mnp);            /* Lock while updating */
+            if (PN_STRCMP(FALSE,
+                          MFS_STRBUFPN_PAIR_GET_KPN(&(mnp->mn_view.svr.lpn)).s,
+                          MFS_STRBUFPN_PAIR_GET_KPN(&(vtp_ex->spath)).s) == 0 &&
+                HN_STRCMP(mnp->mn_view.svr.host, host) == 0 &&
+                PN_STRCMP(FALSE, mnp->mn_view.svr.rpn, rpn) == 0 &&
+                MFS_UUIDEQ(mnp->mn_view.svr.uuid, vtp_ex->uuid))
+            {
+                /* Always fix with latest address */
+                mnp->mn_view.svr.addr = vtp_ex->addr;
+                mnp->mn_view.svr.svrbound = 1;  /* Reset flags */
+                mnp->mn_view.svr.dprinted = 0;
+                mnp->mn_view.svr.uprinted = 0;
+                data->status = TBS_ST_OK;
+            } else {
+                /* 
+                 * Exists, but not same info, give EEXIST error
+                 */
+                data->status = TBS_ST_EEXIST;
+            }
 
-            /* mark whether windows view or not */
-            mnp->mn_view.windows_view = vtp->windows_view; 
-
-            mnp->mn_view.svr.lpn = vtp->spath;
-            /* Don't use MFS_STRBUFPN_PAIR_GET_{KPN,UPN} macros because we want
-            ** to make sure we are setting both fields to NULL.
-            */
-            (vtp->spath).kpn.s = NULL;
-            (vtp->spath).upn.s = NULL;
-
-            /* View server hostname already filled in during mfs_viewdirmkdir call */
-            mnp->mn_view.svr.rpn = rpn;   rpn = NULL;
-            mnp->mn_view.svr.uuid = vtp->uuid;
-            mnp->mn_view.svr.addr = vtp->addr;
-            mnp->mn_view.svr.svrbound = 1;  /* reset flags */
-            mnp->mn_view.svr.dprinted = 0;
-            mnp->mn_view.svr.uprinted = 0;
-            /* 
-             * Make view handle be UUID too.  This catches cases where I am
-             * talking to a different view than I think I am.
-             */
-            mnp->mn_view.vh.view_uuid = vtp->uuid;
-            vwcreds = MDKI_GET_UCRED();
-            mnp->mn_view.cuid = MDKI_CR_GET_UID(vwcreds);
-            mnp->mn_view.cgid = MDKI_CR_GET_GID(vwcreds);
-            MDKI_CRFREE(vwcreds);
             MUNLOCK(mnp);
             mvfs_rvcflush(vw, NULL); /* Flush root version cache */
             if (vw) VN_RELE(vw);
+        } else {
+            /* Look to see if some process might still be attached to
+             * it (but the tag was removed by another process). If so,
+             * resurrect it.
+             */
+            error = mvfs_viewuuidrecover(tagn,
+                                         &(vtp_ex->uuid), host,
+                                         &(vtp_ex->spath), rpn, &vw, cred);
+            switch (error) {
+              case 0:
+                mnp = VTOM(vw);
+                MLOCK(mnp);
+                mnp->mn_view.svr.addr = vtp_ex->addr;
+                mnp->mn_view.svr.svrbound = 1;  /* Reset flags */
+                mnp->mn_view.svr.dprinted = 0;
+                mnp->mn_view.svr.uprinted = 0;
+                data->status = TBS_ST_OK;
+                MUNLOCK(mnp);
+                mvfs_rvcflush(vw, NULL);	/* Flush root version cache */
+                VN_RELE(vw);
+                goto out;
+
+              default:
+                /* some problem reattaching; return this error */
+                data->status = tbs_errno2status(error);
+                error = 0;
+                goto out;
+
+              case ENOENT:
+                /* not found to reattach, let's do the hard work */
+                break;
+            }
+            /* Doesn't exist... try to create it */
+            dvp = mfs_getviewroot();   /* View root vnode ptr */
+            if (dvp == NULL) {
+                data->status = TBS_ST_MFS_ERR;
+                error = 0;
+
+                /* Make the view-tag.  The windows_view will be FALSE (from the
+                ** caller) for Unix views and set correctly for Windows views,
+                ** so we can just use it in either case.
+                */
+            } else if ((error = mfs_viewdirmkdir(dvp, tagn, NULL, &vw, cred,
+                                                 host, vtp_ex->windows_view))
+                       != 0)
+            {
+                data->status = tbs_errno2status(error);
+                error = 0;
+            } else {
+                ASSERT(vw != NULL);
+                mnp = VTOM(vw);
+                ASSERT(MFS_ISVIEW(mnp));
+                /* 
+                 * Move string ptrs into viewtag.  Null out the local ptrs so they
+                 * are not freed in caller.
+                 */
+                MLOCK(mnp);            /* Lock while updating */
+
+                /* windows_view was filled in during mfs_viewdirmkdir call, but
+                ** maybe it could change...
+                */
+                mnp->mn_view.windows_view = vtp_ex->windows_view;
+                mnp->mn_view.svr.lpn = vtp_ex->spath;
+
+                /* Don't use MFS_STRBUFPN_PAIR_GET_{KPN,UPN} macros because we want
+                ** to make sure we are setting both fields to NULL so we don't free
+                ** them during cleanup (since we copied them).
+                */
+                vtp_ex->spath.kpn.s = NULL;
+                vtp_ex->spath.upn.s = NULL;
+
+                /* View server hostname.  Also, set ptrs to NULL after they're
+                ** copied so we don't free them at the end during cleanup.
+                */
+                mnp->mn_view.svr.rpn = rpn; rpn = NULL;
+
+                mnp->mn_view.svr.net_pn = net_pn; net_pn = NULL;
+                mnp->mn_view.svr.uuid = vtp_ex->uuid;
+                mnp->mn_view.svr.addr = vtp_ex->addr;
+                mnp->mn_view.svr.svrbound = 1;  /* reset flags */
+                mnp->mn_view.svr.dprinted = 0;
+                mnp->mn_view.svr.uprinted = 0;
+                /* 
+                 * Make view handle be UUID too.  This catches cases where I am
+                 * talking to a different view than I think I am.
+                 */
+                mnp->mn_view.vh.view_uuid = vtp_ex->uuid;
+                vwcreds = MDKI_GET_UCRED();
+                mnp->mn_view.cuid = MDKI_CR_GET_UID(vwcreds);
+                mnp->mn_view.cgid = MDKI_CR_GET_GID(vwcreds);
+                MDKI_CRFREE(vwcreds);
+                MUNLOCK(mnp);
+                mvfs_rvcflush(vw, NULL); /* Flush root version cache */
+                if (vw) VN_RELE(vw);
+            }
+        }
+      out:
+        MVFS_UNLOCK(&(vrdp->mvfs_mkviewtag_lock));
+        if (dvp != NULL) {
+            VN_RELE(dvp);
         }
     }
-  out:
-    MVFS_UNLOCK(&(vrdp->mvfs_mkviewtag_lock));
-
-    if (dvp) VN_RELE(dvp);
-    if (tagn) PN_STRFREE(tagn);
-    PNPAIR_STRFREE(&(vtp->spath));
-    if (rpn) PN_STRFREE(rpn);
-    if (host) HN_STRFREE(host);
-
   cleanup:
-    KMEM_FREE(alloc_unitp, sizeof(*alloc_unitp));
-    if (vtp != NULL) {
-    KMEM_FREE(vtp, sizeof(*vtp));
-    }
+    if (net_pn != NULL) PN_STRFREE(net_pn);
+    if (rpn != NULL) PN_STRFREE(rpn);
+    if (host != NULL) HN_STRFREE(host);
+    if (spath_copied_in) PNPAIR_STRFREE(&(vtp_ex->spath));
+    if (tagn != NULL) PN_STRFREE(tagn);
+    if (alloc_unitp != NULL) KMEM_FREE(alloc_unitp, sizeof(*alloc_unitp));
+
     return(error);
 }
 
@@ -2564,6 +2639,7 @@ mvfs_get_stats(
            mvfs_addup_acstat(percpu_sdp, output_sdp);
            mvfs_addup_rlstat(percpu_sdp, output_sdp);
            mvfs_addup_austat(percpu_sdp, output_sdp);
+           mvfs_addup_eacstat(percpu_sdp, output_sdp);
            mvfs_addup_vnopcnt(percpu_sdp, output_sdp);
            mvfs_addup_vfsopcnt(percpu_sdp, output_sdp);
            mvfs_addup_viewopcnt(percpu_sdp, output_sdp);
@@ -2600,7 +2676,7 @@ mvfs_get_stats(
         }
         if (error == 0 && mvfs_statbufsp->rvcstat.s &&
             mvfs_statbufsp->rvcstat.m)
-       {
+        {
             error = COPYOUT((caddr_t)&(output_sdp->mfs_rvcstat),
                             (caddr_t)mvfs_statbufsp->rvcstat.s,
                             KS_MIN(mvfs_statbufsp->rvcstat.m,
@@ -2636,6 +2712,14 @@ mvfs_get_stats(
             error = CopyOutMfs_austat(&(output_sdp->mfs_austat),
                         (caddr_t)mvfs_statbufsp->austat.s,
                         mvfs_statbufsp->austat.m, callinfo);
+        }
+        if (error == 0 && mvfs_statbufsp->eacstat.s &&
+            mvfs_statbufsp->eacstat.m)
+        {
+            error = COPYOUT((caddr_t)&(output_sdp->mvfs_eacstat),
+                            (caddr_t)mvfs_statbufsp->eacstat.s,
+                            KS_MIN(mvfs_statbufsp->eacstat.m,
+                                   sizeof(struct mvfs_eacstat)));
         }
 
         /* Copy out the opcnt vectors */
@@ -3396,6 +3480,23 @@ mvfs_addup_austat(
 }
 
 STATIC void
+mvfs_addup_eacstat(
+    mvfs_stats_data_t *percpu_sdp,
+    mvfs_stats_data_t *sdp
+)
+{
+#define ADDUP_FIELD(field) sdp->mvfs_eacstat.field  += \
+                               percpu_sdp->mvfs_eacstat.field
+
+    ADDUP_FIELD(eac_hits);
+    ADDUP_FIELD(eac_misses);
+    ADDUP_FIELD(eac_hashcnt);
+
+    return;
+
+#undef ADDUP_FIELD
+}
+STATIC void
 mvfs_addup_vnopcnt(
     mvfs_stats_data_t *percpu_sdp,
     mvfs_stats_data_t *sdp
@@ -3514,4 +3615,4 @@ mvfs_pview_stat_zero(struct mvfs_pvstat *pvp)
         pvp->acstat.version = MFS_ACSTAT_VERS;
         pvp->dncstat.version = MFS_DNCSTAT_VERS;
 }
-static const char vnode_verid_mvfs_mioctl_c[] = "$Id:  35b71654.e26e11e1.96ee.00:01:84:c3:8a:52 $";
+static const char vnode_verid_mvfs_mioctl_c[] = "$Id:  3f98b9aa.63e14a7a.a64b.16:ab:42:05:94:b4 $";

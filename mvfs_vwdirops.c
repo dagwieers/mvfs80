@@ -1417,4 +1417,4 @@ mvfs_viewuuidrecover(
     VN_RELE(dvp);
     return error;
 }
-static const char vnode_verid_mvfs_vwdirops_c[] = "$Id:  821561f7.743911e1.81a9.00:01:84:c3:8b:ce $";
+static const char vnode_verid_mvfs_vwdirops_c[] = "$Id:  e3bce542.37d311e1.8ef1.00:01:84:c3:8b:ce $";

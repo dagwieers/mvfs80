@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 1999, 2011 IBM Corporation.
+ * Copyright (C) 1999, 2012 IBM Corporation.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -306,6 +306,10 @@ mdki_linux_clnt_call(
             /* see clnt.c:call_verify().  Probably bad server (try rebind) */
             *status = RPC_PROGUNAVAIL;
             break;
+          case EOPNOTSUPP:
+            /* Determined empirically to be returned when proc unavailable. */
+            *status = RPC_PROCUNAVAIL;
+            break;
           default:
             MDKI_TRACE(TRACE_RPC,"rpc_call status %d?\n", -res);
             *status = RPC_PROGVERSMISMATCH; /* XXX */
@@ -332,4 +336,4 @@ mdki_linux_destroy_client(CLIENT *cl)
 #endif
 }
 
-static const char vnode_verid_mvfs_linux_rpcglue_c[] = "$Id:  8b6bd4a5.0a6311e1.8626.00:01:84:c3:8b:ce $";
+static const char vnode_verid_mvfs_linux_rpcglue_c[] = "$Id:  1469f47f.0c1f11e2.93ec.00:01:83:9c:f6:11 $";

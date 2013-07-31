@@ -1,4 +1,4 @@
-/* * (C) Copyright IBM Corporation 1991, 2012. */
+/* * (C) Copyright IBM Corporation 1991, 2013. */
 /*
  This program is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License as published by
@@ -31,6 +31,7 @@
 
 /* Following is included for prototype macros */
 #include <ks_base.h>
+#include <tbs_base.h>
 
 #include "mvfs_mdep_linux.h"
 
@@ -452,32 +453,31 @@
 #define MVFS_REMOVE_VFS_DATA(vfsp, mmi) vfsp->vfs_data = NULL
 
 #define MVFS_USER_ID CRED_UID_T
+#define MVFS_USER_ID_GET_UID(muid_uid) (muid_uid)
 
 #define MVFS_GROUP_ID CRED_GID_T
+#define MVFS_GROUP_ID_GET_GID(muid_gid) (muid_gid)
 
 #define MVFS_IS_OWNER(cred, va_ptr) (MDKI_CR_GET_UID(cred) == VATTR_GET_UID(va_ptr))
 
-#define MVFS_CHKACCESS(vp, mode, va_ptr, cred) \
-    mfs_chkaccess(vp, mode, (VATTR_GET_UID((va_ptr))), (VATTR_GET_GID((va_ptr))), \
-                  ((int) VATTR_GET_MODE((va_ptr))), cred) 
-#define MFS_CHKACCESS_DEFAULT
-
-/*
- * Some platforms have a kernel routine for checking groupmember,
- * define the default routine here.
- */
-#define MVFS_GROUPMEMBER(gid, cred)	mvfs_groupmember(gid, cred)
-#define MVFS_GROUPMEMBER_DEFAULT
+#define MVFS_CHKACCESS(vp, mode, va_ptr, cred)                                 \
+    mvfs_chkaccess(vp, mode, (VATTR_GET_UID((va_ptr))),                        \
+                   (VATTR_GET_GID((va_ptr))), ((int)VATTR_GET_MODE((va_ptr))), \
+                   cred, FALSE)
+#define MVFS_CHKACCESS_DEFAULT
 
 #define MVFS_CHKACCESS_MNODE(vp, mode, user_id, group_id, mmode, cred) \
-    mfs_chkaccess(vp, mode, user_id, group_id, mmode, cred)
-#define MFS_CHKACCESS_DEFAULT
+    mvfs_chkaccess(vp, mode, user_id, group_id, mmode, cred, TRUE)
+#define MVFS_CHKACCESS_DEFAULT
+
+#define MVFS_GROUPMEMBER(gid, cred) mvfs_groupmember(gid, cred)
+#define MVFS_GROUPMEMBER_DEFAULT
 
 #define MVFS_COMPARE_MNODE_UID(cred, user_id) (MDKI_CR_GET_UID((cred)) == (user_id))
 
 #define MVFS_CREDUTL_SIDS_TO_NATIVE_IDS(mnp, cred) { \
     if ( (CREDUTL_SID_IS_NOBODY((&(mnp)->mn_vob.attr.fstat.usid)) || \
-          CREDUTL_SID_IS_DONTCARE((&(mnp)->mn_vob.attr.fstat.usid))) ) {\
+          CREDUTL_SID_IS_DONTCARE((&(mnp)->mn_vob.attr.fstat.usid))) ) { \
         (mnp)->mn_vob.user_id = TBS_UID_NOBODY; \
     } else { \
         (mnp)->mn_vob.user_id = \
@@ -844,6 +844,8 @@ extern struct mvfs_slab_list* mvfs_vattr_slabs;
 
 #define MDKI_AUDIT_ALLOC_DATA()
 #define MDKI_AUDIT_FREE_DATA()
+#define MDKI_ACL_ALLOC_DATA()
+#define MDKI_ACL_FREE_DATA()
 
 /* Macros to get a pointer to the subsystem data */
 #define MDKI_COMMON_GET_DATAP() (&mvfs_common_data_var)
@@ -855,6 +857,7 @@ extern struct mvfs_slab_list* mvfs_vattr_slabs;
 #define MDKI_STATS_GET_DATAP(cpuid) (mvfs_stats_data_ptr_percpu[cpuid])
 #endif
 #define MDKI_AUDIT_GET_DATAP()  (&mvfs_audit_data_var)
+#define MDKI_ACL_GET_DATAP()  (&mvfs_acl_data_var)
 
 /*
  * For platforms that use interrupt disable to protect the stats data,
@@ -877,6 +880,7 @@ extern struct mvfs_slab_list* mvfs_vattr_slabs;
     BZERO(&(sdp->mfs_acstat), sizeof(mfs_acstat)); \
     BZERO(&(sdp->mfs_rlstat), sizeof(mfs_rlstat)); \
     BZERO(&(sdp->mfs_austat), sizeof(mfs_austat)); \
+    BZERO(&(sdp->mvfs_eacstat), sizeof(mvfs_eacstat)); \
     BZERO(sdp->mfs_vnopcnt, mfs_vnopmax*sizeof(MVFS_STAT_CNT_T)); \
     BZERO(sdp->mfs_vfsopcnt, mfs_vfsopmax*sizeof(MVFS_STAT_CNT_T)); \
     BZERO(sdp->mfs_viewopcnt, mfs_viewopmax*sizeof(MVFS_STAT_CNT_T)); \
@@ -897,6 +901,7 @@ extern struct mvfs_slab_list* mvfs_vattr_slabs;
     sdp->mfs_acstat.version = MFS_ACSTAT_VERS;  \
     sdp->mfs_rlstat.version = MFS_RLSTAT_VERS; \
     sdp->mfs_austat.version = MFS_AUSTAT_VERS; \
+    sdp->mvfs_eacstat.version = MVFS_EACSTAT_VERS; \
     sdp->mfs_viewophist.version = MFS_RPCHIST_VERS;
 #endif
 
@@ -928,4 +933,4 @@ extern struct mvfs_slab_list* mvfs_vattr_slabs;
 #endif
 
 #endif /* MVFS_SYSTM_H_ */
-/* $Id: cc8ced50.1fb911e2.96af.00:01:84:c3:8a:52 $ */
+/* $Id: b2d9773c.5b6211e2.8064.00:01:83:9c:f6:11 $ */

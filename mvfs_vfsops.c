@@ -1,4 +1,4 @@
-/* * (C) Copyright IBM Corporation 1990, 2012. */
+/* * (C) Copyright IBM Corporation 1990, 2013. */
 /*
  This program is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License as published by
@@ -262,6 +262,7 @@ mvfs_misc_free(void)
 
     MVFS_FREE_CREDLIST();
     mvfs_clnt_destroy();
+    mvfs_acl_free();
     mvfs_dncfree();
 
     mvfs_viewfree();
@@ -500,10 +501,16 @@ mvfs_misc_init(
     if (error != 0) {
         goto dncerr;
     }
+    error = mvfs_acl_init(); /* Init the EACL cache. */
+    if (error != 0) {
+        goto clnterr;
+    }
     error = MVFS_INIT_CREDLIST(mma_sizes); /* Init cleartext cred cache */
     if (error != 0) {
         /* Unwind in reverse order */
-        /* don't need to undo mvfs_clear_init, it failed so we came here */
+        /* don't need to undo MVFS_INIT_CREDLIST, it failed so we came here */
+        mvfs_acl_free();
+      clnterr:
         mvfs_clnt_destroy();
       dncerr:
         mvfs_dncfree();
@@ -2416,4 +2423,4 @@ mvfs_find_mount(
     MVFS_UNLOCK(&(mvdp->mvfs_mountlock));
     return result;
 }
-static const char vnode_verid_mvfs_vfsops_c[] = "$Id:  dc6b4b98.946511e1.9480.00:01:84:c3:8a:52 $";
+static const char vnode_verid_mvfs_vfsops_c[] = "$Id:  b1d976dc.5b6211e2.8064.00:01:83:9c:f6:11 $";

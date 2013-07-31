@@ -1,4 +1,4 @@
-/* * (C) Copyright IBM Corporation 1991, 2010. */
+/* * (C) Copyright IBM Corporation 1991, 2012. */
 /*
  This program is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License as published by
@@ -31,10 +31,6 @@
  * to use #ifdef KERNEL to select the kernel only version.
  */
 #include <ks_base.h>
-
-#ifdef __cplusplus
-extern "C" {
-#endif
 
 /* The credentials structure encapsulates the POSIX notion of an
  * identity: the user ID, group ID, and group list.
@@ -88,9 +84,19 @@ credutl_sid_to_unix_uid(const credutl_sid_t *sid_p);
 EXTERN credutl_gid_t
 credutl_sid_to_unix_gid(const credutl_sid_t *sid_p);
 
-#ifdef __cplusplus
-} /* extern "C" */
-#endif
+/****************************************************************************
+ * credutl_sid_eq
+ * Compare two SIDs for equality.
+ * IN	sid1_p		first SID
+ * IN	sid2_p		second SID
+ * RESULT:		TRUE if same; FALSE if different
+ */
+
+EXTERN ks_boolean_t
+credutl_sid_eq(
+    const credutl_sid_t *sid1_p,
+    const credutl_sid_t *sid2_p
+);
 
 #endif /*_CREDUTL_KERNEL_H_*/
-/* $Id: 27c96ecf.cd6c11df.8b98.00:0d:60:24:20:a6 $ */
+/* $Id: fad9ec27.0c1e11e2.93ec.00:01:83:9c:f6:11 $ */

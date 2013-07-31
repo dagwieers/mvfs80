@@ -1,4 +1,4 @@
-/* * (C) Copyright IBM Corporation 1990, 2009. */
+/* * (C) Copyright IBM Corporation 1990, 2013. */
 /*
  This program is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License as published by
@@ -32,6 +32,7 @@
 #include "mvfs_dnc.h"
 #include "mvfs_viewroot.h"
 #include "mvfs_audit.h"
+#include "mvfs_acl.h"
 /* ... Add sub system header files here */
 
 extern mvfs_common_data_t mvfs_common_data_var;
@@ -41,7 +42,8 @@ extern mvfs_dnlc_data_t mvfs_dnlc_data_var;
 extern mvfs_viewroot_data_t mvfs_viewroot_data_var;
 extern mvfs_stats_data_t **mvfs_stats_data_ptr_percpu;
 extern mvfs_audit_data_t mvfs_audit_data_var;
+extern mvfs_acl_data_t mvfs_acl_data_var;
 /* more data to be added */
 
 #endif /* MVFS_H_ */
-/* $Id: fcab9041.929111de.80dc.00:01:84:c3:8b:ce $ */
+/* $Id: b21976f4.5b6211e2.8064.00:01:83:9c:f6:11 $ */

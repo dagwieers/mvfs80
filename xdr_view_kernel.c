@@ -1,4 +1,4 @@
-/* * (C) Copyright IBM Corporation 1991, 2005. */
+/* * (C) Copyright IBM Corporation 1991, 2012. */
 /*
  This program is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License as published by
@@ -31,6 +31,10 @@
 #include "view_rpc_kernel.h"
 /* Following is for xdr_ks_canon_pname_t prototype */
 #include <xdr_ks.h>
+/* Following is for xdr_tbs_sid_acl_h_t */
+#include <tbs_rpc_kernel.h>
+
+#define PROVIDE_V8_COMPAT
 
 EZ_XDR_ROUTINE(view_fhandle_t)
 {
@@ -57,8 +61,24 @@ EZ_XDR_ROUTINE(view_vstat_t)
 	    xdr_vob_mtype_t(xdrs, &objp->mtype EZ_XDR_ARG_PASSTHRU) &&
 	    xdr_tbs_oid_t(xdrs, &objp->elem_oid EZ_XDR_ARG_PASSTHRU) &&
 	    xdr_tbs_oid_t(xdrs, &objp->obj_oid EZ_XDR_ARG_PASSTHRU) &&
+	    xdr_timeval(xdrs, &objp->event_time) && 
+	    xdr_tbs_oid_t(xdrs, &objp->rolemap_oid EZ_XDR_ARG_PASSTHRU) &&
+	    xdr_timeval(xdrs, &objp->eacl_mtime));
+}
+
+#ifdef PROVIDE_V8_COMPAT
+EZ_XDR_ROUTINE(view_vstat_v8_t)
+{
+    if (xdrs->x_op == XDR_FREE)
+	return TRUE;
+
+    return (xdr_tbs_fstat_db_t(xdrs, &objp->fstat EZ_XDR_ARG_PASSTHRU) &&
+	    xdr_vob_mtype_t(xdrs, &objp->mtype EZ_XDR_ARG_PASSTHRU) &&
+	    xdr_tbs_oid_t(xdrs, &objp->elem_oid EZ_XDR_ARG_PASSTHRU) &&
+	    xdr_tbs_oid_t(xdrs, &objp->obj_oid EZ_XDR_ARG_PASSTHRU) &&
 	    xdr_timeval(xdrs, &objp->event_time));
 }
+#endif
 
 EZ_XDR_ROUTINE(view_set_attr_t)
 {
@@ -193,6 +213,23 @@ xdr_view_dir_reply_t(
     return (xdr_view_vstat_t(xdrs, &objp->vstat EZ_XDR_ARG));
 }
 
+#ifdef PROVIDE_V8_COMPAT
+bool_t
+xdr_view_dir_v8_reply_t(
+     XDR *xdrs,
+     view_dir_v8_reply_t *objp
+)
+{
+    if (!xdr_view_hdr_reply_t(xdrs, &objp->hdr)) {
+	return (FALSE);
+    }
+    if (objp->hdr.status != TBS_ST_OK) {
+	return (TRUE);
+    }
+    return (xdr_view_vstat_v8_t(xdrs, &objp->vstat EZ_XDR_ARG));
+}
+#endif
+
 EZ_XDR_ROUTINE(view_dir_mod_t)
 {
     return (xdr_view_vstat_t(xdrs, &objp->dvstat EZ_XDR_ARG_PASSTHRU) &&
@@ -212,6 +249,29 @@ xdr_view_dir_mod_reply_t(
     }
     return (xdr_view_dir_mod_t(xdrs, &objp->dir_mod EZ_XDR_ARG));
 }
+
+#ifdef PROVIDE_V8_COMPAT
+EZ_XDR_ROUTINE(view_dir_mod_v8_t)
+{
+    return (xdr_view_vstat_v8_t(xdrs, &objp->dvstat EZ_XDR_ARG_PASSTHRU) &&
+	    xdr_bool(xdrs, &objp->dir_dtm_valid));
+}
+
+bool_t
+xdr_view_dir_mod_v8_reply_t(
+     XDR *xdrs,
+     view_dir_mod_v8_reply_t *objp
+)
+{
+    if (!xdr_view_hdr_reply_t(xdrs, &objp->hdr)) {
+	return (FALSE);
+    }
+    if (objp->hdr.status != TBS_ST_OK) {
+	return (TRUE);
+    }
+    return (xdr_view_dir_mod_v8_t(xdrs, &objp->dir_mod EZ_XDR_ARG));
+}
+#endif
 
 bool_t
 xdr_view_replica_root_req_t(
@@ -242,6 +302,25 @@ xdr_view_root_reply_t(
 	    xdr_view_fhandle_t(xdrs, &objp->fhandle EZ_XDR_ARG) &&
 	    xdr_bool(xdrs, &objp->bh_invariant));
 }
+
+#ifdef PROVIDE_V8_COMPAT
+bool_t
+xdr_view_root_v8_reply_t(
+     XDR *xdrs,
+     view_root_v8_reply_t *objp
+)
+{
+    if (!xdr_view_hdr_reply_t(xdrs, &objp->hdr)) {
+	return (FALSE);
+    }
+    if (objp->hdr.status != TBS_ST_OK) {
+	return (TRUE);
+    }
+    return (xdr_view_vstat_v8_t(xdrs, &objp->vstat EZ_XDR_ARG) &&
+	    xdr_view_fhandle_t(xdrs, &objp->fhandle EZ_XDR_ARG) &&
+	    xdr_bool(xdrs, &objp->bh_invariant));
+}
+#endif
 
 bool_t
 xdr_view_lookup_req_t(
@@ -274,6 +353,28 @@ xdr_view_lookup_reply_t(
 	    xdr_timeval(xdrs, &objp->lvut));
 }
 
+#ifdef PROVIDE_V8_COMPAT
+bool_t
+xdr_view_lookup_v8_reply_t(
+     XDR *xdrs,
+     view_lookup_v8_reply_t *objp
+)
+{
+    if (!xdr_view_hdr_reply_t(xdrs, &objp->hdr) ||
+	!xdr_view_name_state_t(xdrs, &objp->name_state EZ_XDR_ARG)) {
+	return (FALSE);
+    }
+    if (objp->hdr.status != TBS_ST_OK) {
+	return (TRUE);
+    }
+    return (xdr_view_fhandle_t(xdrs, &objp->fhandle EZ_XDR_ARG) &&
+	    xdr_view_vstat_v8_t(xdrs, &objp->vstat EZ_XDR_ARG) &&
+	    xdr_size_t(xdrs, &objp->residual_resolved EZ_XDR_ARG) &&
+	    xdr_bool(xdrs, &objp->bh_invariant) &&
+	    xdr_timeval(xdrs, &objp->lvut));
+}
+#endif
+
 bool_t
 xdr_view_getattr_req_t(
      XDR *xdrs,
@@ -291,14 +392,49 @@ xdr_view_getattr_reply_t(
     if (!xdr_view_hdr_reply_t(xdrs, &objp->hdr)) {
 	return (FALSE);
     }
-    if (objp->hdr.status != TBS_ST_OK) {
-	return (TRUE);
+
+    switch (objp->hdr.status) {
+      case TBS_ST_OK:
+        break;
+      case TBS_ST_EACCES:
+        if (xdr_view_name_state_t(xdrs, &objp->name_state EZ_XDR_ARG)) {
+            return (TRUE);
+        }
+        else {
+            return (FALSE);
+        }
+        break;
+      default:
+        return (TRUE);
+        break;
     }
+
     return (xdr_view_vstat_t(xdrs, &objp->vstat EZ_XDR_ARG) &&
+            xdr_view_name_state_t(xdrs, &objp->name_state EZ_XDR_ARG) &&
 	    xdr_view_fhandle_t(xdrs, &objp->fhandle EZ_XDR_ARG) &&
 	    xdr_timeval(xdrs, &objp->lvut) &&
 	    xdr_bool(xdrs, &objp->bh_invariant));
 }
+
+#ifdef PROVIDE_V8_COMPAT
+bool_t
+xdr_view_getattr_v8_reply_t(
+     XDR *xdrs,
+     view_getattr_v8_reply_t *objp
+)
+{
+    if (!xdr_view_hdr_reply_t(xdrs, &objp->hdr)) {
+	return (FALSE);
+    }
+    if (objp->hdr.status != TBS_ST_OK) {
+	return (TRUE);
+    }
+    return (xdr_view_vstat_v8_t(xdrs, &objp->vstat EZ_XDR_ARG) &&
+	    xdr_view_fhandle_t(xdrs, &objp->fhandle EZ_XDR_ARG) &&
+	    xdr_timeval(xdrs, &objp->lvut) &&
+	    xdr_bool(xdrs, &objp->bh_invariant));
+}
+#endif
 
 bool_t
 xdr_view_setattr_req_t(
@@ -365,6 +501,27 @@ xdr_view_create_reply_t(
 	    xdr_ks_canon_pname_p_t(xdrs, &objp->text EZ_XDR_ARG));
 }
 
+#ifdef PROVIDE_V8_COMPAT
+bool_t
+xdr_view_create_v8_reply_t(
+     XDR *xdrs,
+     view_create_v8_reply_t *objp
+)
+{
+    if (!xdr_view_hdr_reply_t(xdrs, &objp->hdr)) {
+	return (FALSE);
+    }
+    if (objp->hdr.status != TBS_ST_OK) {
+	return (TRUE);
+    }
+    return (xdr_view_fhandle_t(xdrs, &objp->fhandle EZ_XDR_ARG) &&
+	    xdr_view_vstat_v8_t(xdrs, &objp->vstat EZ_XDR_ARG) &&
+	    xdr_view_dir_mod_v8_t(xdrs, &objp->dir_mod EZ_XDR_ARG) &&
+	    xdr_size_t(xdrs, &objp->text_size EZ_XDR_ARG) &&
+	    xdr_ks_canon_pname_p_t(xdrs, &objp->text EZ_XDR_ARG));
+}
+#endif
+
 bool_t
 xdr_view_link_req_t(
      XDR *xdrs,
@@ -414,6 +571,25 @@ xdr_view_symlink_reply_t(
 	    xdr_view_vstat_t(xdrs, &objp->vstat EZ_XDR_ARG) &&
 	    xdr_view_dir_mod_t(xdrs, &objp->dir_mod EZ_XDR_ARG));
 }
+
+#ifdef PROVIDE_V8_COMPAT
+bool_t
+xdr_view_symlink_v8_reply_t(
+     XDR *xdrs,
+     view_symlink_v8_reply_t *objp
+)
+{
+    if (!xdr_view_hdr_reply_t(xdrs, &objp->hdr)) {
+	return (FALSE);
+    }
+    if (objp->hdr.status != TBS_ST_OK) {
+	return (TRUE);
+    }
+    return (xdr_view_fhandle_t(xdrs, &objp->fhandle EZ_XDR_ARG) &&
+	    xdr_view_vstat_v8_t(xdrs, &objp->vstat EZ_XDR_ARG) &&
+	    xdr_view_dir_mod_v8_t(xdrs, &objp->dir_mod EZ_XDR_ARG));
+}
+#endif
 
 bool_t
 xdr_view_mkdir_req_t(
@@ -641,5 +817,44 @@ xdr_view_getprop_reply_t(
 {
     return (xdr_view_hdr_reply_t(xdrs, &objp->hdr) &&
 	    xdr_u_long(xdrs, &objp->pvalue));
+}
+
+bool_t
+xdr_view_eacl_cursor_t(
+    XDR *xdrs,
+    view_eacl_cursor_t *objp
+)
+{
+    return (xdr_timeval(xdrs, &objp->eacl_mtime) &&
+            XDR_KS_U_INT32(xdrs, &objp->next_offset));
+}
+
+bool_t
+xdr_view_eacl_rolemap_req_t(
+     XDR *xdrs,
+     view_eacl_rolemap_req_t *objp)
+{
+    return (xdr_view_hdr_req_t(xdrs, &objp->hdr) &&
+	    xdr_tbs_uuid_t(xdrs, &objp->replica_uuid EZ_XDR_ARG) &&
+	    xdr_tbs_oid_t(xdrs, &objp->rolemap_oid EZ_XDR_ARG) &&
+            xdr_view_eacl_cursor_t(xdrs, &objp->cursor));
+}
+
+bool_t
+xdr_view_eacl_rolemap_reply_t(
+     XDR *xdrs,
+     view_eacl_rolemap_reply_t *objp)
+{
+    if (!xdr_view_hdr_reply_t(xdrs, &objp->hdr)) {
+	return (FALSE);
+    }
+    if (objp->hdr.status != TBS_ST_OK) {
+	return (TRUE);
+    }
+    return (xdr_tbs_sid_acl_fragment_t(xdrs, &objp->cursor.next_offset,
+                                       &objp->eaclh) &&
+            xdr_view_eacl_cursor_t(xdrs, &objp->cursor) &&
+	    xdr_timeval(xdrs, &objp->eacl_mtime) &&
+	    xdr_tbs_oid_t(xdrs, &objp->policy_oid EZ_XDR_ARG));
 }
 static const char vnode_verid_xdr_view_kernel_c[] = "$Id:  f02d4dd8.16a311d7.939c.00:01:80:ae:c2:81 $";

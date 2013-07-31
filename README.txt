@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 1999, 2012 IBM Corporation.
+ * Copyright (C) 1999, 2013 IBM Corporation.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,7 +21,7 @@
  * For support, please visit http://www.ibm.com/software/support
  */
 This file contains instructions on how to rebuild the mvfs
-module for use with ClearCase 8.0.
+module for use with ClearCase 8.0.1.
 
 By default the Installation Manager will attempt to rebuild the mvfs module.
 If that does not work you can retry the install and select the option to 
@@ -45,8 +45,8 @@ Instructions for rebuilding the kernel module can be found in the
 installation and configuration help.  What follows summarizes those 
 instructions and provides some additional troubleshooting information.
 
-REBUILD INSTRUCTIONS for ClearCase 8.0 
-(SLES10, SLES11, RHEL5, RHEL6, MRG 1.3, MRG 2.0, Ubuntu 10.04, Ubuntu 12.04)
+REBUILD INSTRUCTIONS for ClearCase 8.0.1
+(SLES10, SLES11, RHEL5, RHEL6, MRG 1.3, MRG 2.0, Ubuntu 12.04)
 
 After you install ClearCase, boot the kernel you want to use and become
 the superuser. Then build the mvfs module kernel as follows:

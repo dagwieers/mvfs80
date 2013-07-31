@@ -772,20 +772,6 @@ vnode_d_alloc_root(
 }
 
 extern DENT_T *
-vnode_d_alloc_anon(
-    INODE_T * anonip,
-    const char *file,
-    const char *func,
-    int line
-)
-{
-    DENT_T *dent = d_alloc_anon(anonip);
-    MDKI_TRACE(TRACE_DCACHE,"d_anon ip=%p dent=%p @ %s:%s:%d\n",
-              anonip, dent, file, func, line);
-    return dent;
-}
-
-extern DENT_T *
 vnode_d_splice_alias(
     INODE_T *ip,
     DENT_T *dent,
@@ -900,4 +886,4 @@ vnlayer_dent2vfsmnt(DENT_T *dentry)
         mnt = MDKI_MNTGET(mnt);
     return(mnt);
 }
-static const char vnode_verid_mvfs_linux_dops_c[] = "$Id:  077d0b08.1fba11e2.96af.00:01:84:c3:8a:52 $";
+static const char vnode_verid_mvfs_linux_dops_c[] = "$Id:  a74002fe.196a11e2.9cb5.00:01:84:c3:8a:52 $";

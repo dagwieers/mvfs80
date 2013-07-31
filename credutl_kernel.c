@@ -1,4 +1,4 @@
-/* * (C) Copyright IBM Corporation 1991, 2008. */
+/* * (C) Copyright IBM Corporation 1991, 2012. */
 /*
  This program is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License as published by
@@ -29,6 +29,7 @@
 
 #define	CREDUTL_ASSERT ASSERT
 #define CREDUTL_MEM_ZERO BZERO
+#define CREDUTL_MEMCMP BCMP
 
 /*
  * UNIX platforms can only ever handle UNIX style SIDs
@@ -192,4 +193,24 @@ credutl_sid_to_unix_gid(const credutl_sid_t *sid_p)
     return(gid);
 }
 
+/****************************************************************************
+ * credutl_sid_eq
+ * Compare two SIDs for equality.
+ * IN	sid1_p		first SID
+ * IN	sid2_p		second SID
+ * RESULT:		TRUE if same; FALSE if different
+ */
+
+ks_boolean_t
+credutl_sid_eq (
+    const credutl_sid_t *sid1_p,
+    const credutl_sid_t *sid2_p
+)
+{
+    if (sid1_p == sid2_p)
+        return TRUE;
+
+    return sid1_p->length == sid2_p->length &&
+              (CREDUTL_MEMCMP(sid1_p, sid2_p, sid1_p->length) == 0);
+}
 static const char vnode_verid_credutl_kernel_c[] = "$Id:  e9ae0bf1.145d11d7.81b6.00:50:da:ba:19:c8 $";

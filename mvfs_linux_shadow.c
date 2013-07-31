@@ -632,4 +632,4 @@ IN_OPS_T vnode_shadow_slink_inode_ops = {
     .removexattr =      &vnode_shadow_iop_removexattr,
 };
 
-static const char vnode_verid_mvfs_linux_shadow_c[] = "$Id:  c23e4ee4.dc2711e1.9bd8.00:01:84:c3:8a:52 $";
+static const char vnode_verid_mvfs_linux_shadow_c[] = "$Id:  6c2267b8.d02e11e1.95d1.00:01:84:c3:8a:52 $";
