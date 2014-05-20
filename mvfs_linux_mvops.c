@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 1999, 2013 IBM Corporation.
+ * Copyright (C) 1999, 2014 IBM Corporation.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -158,7 +158,10 @@ mvop_linux_lookupvp(
     struct nameidata *nd
 )
 {
-    char   *pn;
+#if (defined RATL_REDHAT && RATL_VENDOR_VER >= 605)
+    struct filename *fn = NULL;
+#endif
+    const char *pn = NULL;
     DENT_T *found = NULL;
     STACK_CHECK_DECL()
 
@@ -173,11 +176,22 @@ mvop_linux_lookupvp(
     *cvpp = NULL;
 
     if (segflg == UIO_USERSPACE) {
+#if (defined RATL_REDHAT && RATL_VENDOR_VER >= 605)
+        fn = getname(path);
+        if (IS_ERR(fn)) {
+            error = vnlayer_errno_linux_to_unix(PTR_ERR(fn));
+            fn = NULL;
+        } else {
+            pn = fn->name;
+        }
+#else
         pn = getname(path);
         if (IS_ERR(pn)) {
                 error = vnlayer_errno_linux_to_unix(PTR_ERR(pn));
                 pn = NULL;
-        } else {
+        }
+#endif
+        if (pn != NULL) {
             MDKI_TRACE(TRACE_USERLOOKUP, "user lookup: pn=%s\n", pn);
         }
     } else {
@@ -319,9 +333,16 @@ mvop_linux_lookupvp(
                        pn, error);
         }
     }
+#if (defined RATL_REDHAT && RATL_VENDOR_VER >= 605)
+    if ((segflg == UIO_USERSPACE) && (fn != NULL)) {
+        /* after this point, pn is no longer valid */
+        putname(fn);
+    }
+#else
     if ((segflg == UIO_USERSPACE) && (pn != NULL)) {
         putname(pn);
     }
+#endif
     if (nd != myndp) {
         /* If they're not equal, then myndp can't be NULL since we only
         ** allocate it if nd == NULL, and if there was an error during the
@@ -3162,4 +3183,4 @@ VFS_T vnlayer_cltxt_vfs = {
     .vfs_op =     &vnlayer_linux_cltxt_vfsop
     /* initialize vfs_sb at runtime */
 };
-static const char vnode_verid_mvfs_linux_mvops_c[] = "$Id:  bfd982a4.009911e3.8267.00:01:84:c3:8a:52 $";
+static const char vnode_verid_mvfs_linux_mvops_c[] = "$Id:  00935ddd.837711e3.9592.00:11:25:27:c4:b4 $";

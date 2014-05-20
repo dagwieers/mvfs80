@@ -1,4 +1,4 @@
-/* * (C) Copyright IBM Corporation 1991, 2013. */
+/* * (C) Copyright IBM Corporation 1991, 2014. */
 /*
  This program is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License as published by
@@ -704,7 +704,7 @@ mfs_clnt_lookup(
      *						stripped (stay in HM)
      * Also: look out for special cases:
      *
-     * Case "." or ".@@":  If lookup same as parent, mfs_makevobnode would
+     * Case "." or ".@@":  If lookup same as parent, mvfs_makevobnode would
      * try to lock an already locked vnode and panic on a recursive lock.
      *
      *     View 	Name (hm suffix?)	Action
@@ -717,9 +717,9 @@ mfs_clnt_lookup(
      *			".@@"			Return same vnode
      *
      * Case ".." or "..@@":  Lookup is going up the tree.  If kept dir
-     * vnode locked while in mfs_makevobnode (and lock result of lookup),
+     * vnode locked while in mvfs_makevobnode (and lock result of lookup),
      * then lock order would be child->parent and can cause a deadlock.
-     * So... must unlock the dir before the mfs_makevobnode below.
+     * So... must unlock the dir before the mvfs_makevobnode below.
      *
      * Case: "^@@" (hmvers_nm) is really a lookup of ".@@" but
      * it warps to the version level instead of the element level
@@ -870,9 +870,9 @@ retry:
         {
             rrp->vstat.fstat.size += mfs_hmsuffix_len();
         }
-        error = mfs_makevobnode(&(rrp->vstat), &(rrp->lvut), lvp->vw,
-                                &(rrp->fhandle), dvp->v_vfsp, cd,
-                                vpp);
+
+	error = mvfs_makevobnode(&rrp->vstat, &rrp->lvut, lvp->vw,
+                                 &rrp->fhandle, dvp->v_vfsp, cd, vpp, FALSE);
 
         if (error == ENOENT) {
             /* This happens on Linux if VNGET finds that the vnode is in 
@@ -1032,8 +1032,8 @@ mfs_clnt_create(
         mvfs_attrcache(mnp, dvp->v_vfsp, &(rrp->dir_mod.dvstat),
                        rrp->dir_mod.dir_dtm_valid, cd, TRUE);
         MVFS_CLNT_RDDIR_CACHE_CHECK(mnp, dvp, nm, dtm_save, "mvfs_clnt_create");
-        error = mfs_makevobnode(&(rrp->vstat), 0, vw, &(rrp->fhandle),
-                                dvp->v_vfsp, cd, vpp);
+        error = mvfs_makevobnode(&(rrp->vstat), 0, vw, &(rrp->fhandle),
+                                 dvp->v_vfsp, cd, vpp, TRUE);
 	
 	if (!error) {
 	    /* Creates must be in view, and these are BH invariant */
@@ -1288,8 +1288,8 @@ mfs_clnt_mkdir(
         mvfs_attrcache(mnp, dvp->v_vfsp, &(rrp->dir_mod.dvstat),
                        rrp->dir_mod.dir_dtm_valid, cd, TRUE);
         MVFS_CLNT_RDDIR_CACHE_CHECK(mnp, dvp, nm, dtm_save, "mvfs_clnt_mkdir");
-        error = mfs_makevobnode(&(rrp->vstat), 0, vw, &(rrp->fhandle),
-                                dvp->v_vfsp, cd, vpp);
+        error = mvfs_makevobnode(&(rrp->vstat), 0, vw, &(rrp->fhandle),
+                                 dvp->v_vfsp, cd, vpp, TRUE);
         if (!error) {
 	    /* Mkdir must be in view, and these are BH invariant */
 	    mfs_dncadd(dvp, MFS_DNC_BHINVARIANT, nm, *vpp, cd);
@@ -1417,8 +1417,8 @@ mfs_clnt_symlink(
                        rrp->dir_mod.dir_dtm_valid, cd, TRUE);
         MVFS_CLNT_RDDIR_CACHE_CHECK(mnp, dvp, tnm, dtm_save,
                                     "mvfs_clnt_symlink");
-        error = mfs_makevobnode(&(rrp->vstat), 0, vw, &(rrp->fhandle),
-                                dvp->v_vfsp, cd, vpp);
+        error = mvfs_makevobnode(&(rrp->vstat), 0, vw, &(rrp->fhandle),
+                                 dvp->v_vfsp, cd, vpp, TRUE);
         if (!error) {
 	    /* Create symlink must be in view, and these are BH invariant */
 	    mfs_dncadd(dvp, MFS_DNC_BHINVARIANT, lnm, *vpp, cd);
@@ -1856,8 +1856,8 @@ mfs_clnt_bindroot(
 	}
 
 	/* Now we can make the vnode */
-        error = mfs_makevobnode(&(rrp->vstat), &(rrp->lvut), vw,
-                                &(rrp->fhandle), vfsp, cd, vpp);
+        error = mvfs_makevobnode(&(rrp->vstat), &(rrp->lvut), vw,
+                                 &(rrp->fhandle), vfsp, cd, vpp, TRUE);
     } else {
 	if (error == ENOENT) {
 	    if (rrp->hdr.status == TBS_ST_VIEW_NO_VER) {
@@ -1947,8 +1947,8 @@ mfs_clnt_rebind_dir(
  	 * since no locking order enforced between different versions
 	 * of the same dir.  SO... dvp must be unlocked!
          */
-        error = mfs_makevobnode(&(rrp->vstat), 0, vw, &(rrp->fhandle),
-                                dvp->v_vfsp, cd, vpp);
+        error = mvfs_makevobnode(&(rrp->vstat), 0, vw, &(rrp->fhandle),
+                                 dvp->v_vfsp, cd, vpp, TRUE);
     } else {
 	MFS_CHK_STALE(error, dvp);
     }
@@ -2257,7 +2257,7 @@ mvfs_clnt_ping_server(
 /* MVFS_CLNT_GET_EACL_MNP - Get an effective ACL by using the rolemap oid.  The
 ** caller is assumed to have the mnode locked.  This routine is like
 ** mfs_getattr_mnp since the caller might not have a vnode ptr (e.g. we might
-** have been called from mfs_makevobnode() after the mfs_mnget() but before the
+** have been called from mvfs_makevobnode() after the mfs_mnget() but before the
 ** MVFS_VNGET).
 */
 int
@@ -2342,4 +2342,4 @@ mvfs_clnt_get_eacl_mnp(
     *statusp = status;
     return(error);
 }
-static const char vnode_verid_mvfs_clnt_c[] = "$Id:  fbe2eb56.cabb454a.8ea9.53:25:f2:4e:f6:0d $";
+static const char vnode_verid_mvfs_clnt_c[] = "$Id:  cd5559f0.7d4911e3.81b9.44:37:e6:71:2b:ed $";

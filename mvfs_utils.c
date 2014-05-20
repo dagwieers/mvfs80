@@ -1,4 +1,4 @@
-/* * (C) Copyright IBM Corporation 1990, 2013. */
+/* * (C) Copyright IBM Corporation 1990, 2014. */
 /*
  This program is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License as published by
@@ -1146,16 +1146,12 @@ mvfs_logfile_putstr(
 
     MVFS_LOCK(&mvfs_printf_lock);
 
-    /* Note, mvfs_mythread() won't be called by platforms that don't define
-    ** MVFS_INIT_TEMP_CD since mvfs_systm.h just turns it into an assignment of
-    ** the cred argument.  This is good because this routine is called by
-    ** mvfs_logfile_vprintf_3(), which is called by mvfs_log(), which is used in
-    ** mvfsinit() to print the MVFS version string into the log before the proc
-    ** lock hash table is initialized (and mvfs_mythread() needs the proc lock).
-    ** This seems to work on Windows (XXX and maybe Linux) since the lock must
-    ** be initialized earlier.
+    /* Leave the thread pointer NULL here.  Neither MVOP_GETATTR or 
+    ** MVOP_WRITE_KERNEL use the thread pointer on either Windows or Linux.
+    ** This avoids a call to mvfs_mythread() which caused a deadlock if we are
+    ** logging while holding the proc lock, which we do in a number of cases.
     */
-    MVFS_INIT_TEMP_CD(cd_p, printf_log_cred, mvfs_mythread(NULL));
+    MVFS_INIT_TEMP_CD(cd_p, printf_log_cred, NULL);
 
     uiop = &uios;
     uios.uio_iov = &iov;
@@ -1558,4 +1554,4 @@ mvfs_bumptime(
 
     return;
 }
-static const char vnode_verid_mvfs_utils_c[] = "$Id:  c9627492.113d4bcb.a6e2.9b:51:24:e9:78:cf $";
+static const char vnode_verid_mvfs_utils_c[] = "$Id:  a09e0d78.7a2e11e3.826c.44:37:e6:71:2b:ed $";

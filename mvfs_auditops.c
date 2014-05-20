@@ -1,4 +1,4 @@
-/* * (C) Copyright IBM Corporation 1991, 2013. */
+/* * (C) Copyright IBM Corporation 1991, 2014. */
 /*
  This program is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License as published by
@@ -60,11 +60,11 @@ STATIC int mfs_cmpdirrec(mfs_auditrec_t *rp,
                          char *nm,
                          size_t nmlen,
                          VNODE_T *vp,
-                         VATTR_T *vap);
+                         struct timeval *dtm);
 STATIC int mfs_cmprwrec(mfs_auditrec_t *rp,
                         u_int kind,
                         VNODE_T *vp,
-                        VATTR_T *vap);
+                        struct timeval *dtm);
 STATIC int mfs_cmpviewrec(mfs_auditrec_t *rp,
                           VNODE_T *vp);
 STATIC int mfs_isdupl(mfs_auditfile_t *afp,
@@ -73,9 +73,13 @@ STATIC int mfs_isdupl(mfs_auditfile_t *afp,
                       char *nm,
                       size_t nmlen,
                       VNODE_T *vp,
-                      VATTR_T *vap);
+                      struct timeval *dtm);
 STATIC void mvfs_auditwrite_int(mfs_auditfile_t *afp,
                                 mvfs_thread_t *mth);
+STATIC MVFS_NOINLINE void mvfs_audit_get_mtime(VNODE_T *vp,
+                      struct timeval *mtime_p,
+                      mvfs_thread_t *mth,
+                      CALL_DATA_T *cd);
 
 /*
  * Initialize the structures for managing the audit subsystem
@@ -776,16 +780,15 @@ mfs_v2objtype(VTYPE_T vtype)
 }
 
 STATIC int
-mfs_cmpdirrec(rp, kind, dvp, nm, nmlen, vp, vap)
+mfs_cmpdirrec(rp, kind, dvp, nm, nmlen, vp, dtm)
 register mfs_auditrec_t *rp;
 u_int kind;
 VNODE_T *dvp;
 char *nm;
 size_t nmlen;
 VNODE_T *vp;
-VATTR_T *vap;
+struct timeval *dtm;
 {
-    struct timeval tv;
 
     if (rp->mfs_dirrec.namlen != nmlen) {
         MDB_XLOG((MDB_AUDITOPS2, "mismatch namlen\n"));
@@ -795,8 +798,7 @@ VATTR_T *vap;
         MDB_XLOG((MDB_AUDITOPS2, "mismatch objtype\n"));
         return(0);
     }
-    VATTR_GET_MTIME_TV(vap, &tv);
-    if (!MFS_TVEQ(tv, rp->mfs_dirrec.objdtm)) { 
+    if (!MFS_TVEQ(*dtm, rp->mfs_dirrec.objdtm)) { 
         MDB_XLOG((MDB_AUDITOPS2, "mismatch dtm\n"));
         return(0);
     }
@@ -865,13 +867,12 @@ VNODE_T *vp;
 }
 
 STATIC int
-mfs_cmprwrec(rp, kind, vp, vap)
+mfs_cmprwrec(rp, kind, vp, dtm)
 register mfs_auditrec_t *rp;
 u_int kind;
 VNODE_T *vp;
-VATTR_T *vap;
+struct timeval *dtm;
 {
-    struct timeval tv;
 
     if (rp->mfs_rwrec.objtype != mfs_v2objtype(MVFS_GETVTYPE(vp))) {
         MDB_XLOG((MDB_AUDITOPS2, "mismatch objtype\n"));
@@ -880,8 +881,7 @@ VATTR_T *vap;
     /* Ignore DTM changes on writes.  They always change
        with every write. */
     if (kind != MFS_AR_WRITE) {
-        VATTR_GET_MTIME_TV(vap, &tv);
-        if (!MFS_TVEQ(tv, rp->mfs_rwrec.objdtm)) {
+        if (!MFS_TVEQ(*dtm, rp->mfs_rwrec.objdtm)) {
             MDB_XLOG((MDB_AUDITOPS2, "mismatch dtm\n"));
             return(0);
         }
@@ -908,14 +908,14 @@ VATTR_T *vap;
 }
 
 STATIC int
-mfs_isdupl(afp, kind, dvp, nm, nmlen, vp, vap)
+mfs_isdupl(afp, kind, dvp, nm, nmlen, vp, dtm)
 mfs_auditfile_t *afp;
 u_int kind;
 VNODE_T *dvp;
 char *nm;
 size_t nmlen;
 VNODE_T *vp;
-VATTR_T *vap;
+struct timeval *dtm;
 {
    int i;
    mfs_auditrec_t *rp;
@@ -936,11 +936,11 @@ VATTR_T *vap;
             case MFS_AR_ROOT:
             case MFS_AR_LOOKUP:
             case MFS_AR_RDLINK:
-                if (mfs_cmpdirrec(rp, kind, dvp,nm,nmlen, vp, vap)) return(1);
+                if (mfs_cmpdirrec(rp, kind, dvp, nm, nmlen, vp, dtm)) return(1);
                 break;
             case MFS_AR_READ:
             case MFS_AR_WRITE:
-                if (mfs_cmprwrec(rp, kind, vp, vap)) return(1);
+                if (mfs_cmprwrec(rp, kind, vp, dtm)) return(1);
                 break;
             case MFS_AR_LINK:   /* Hard to dupl once name exists */
             case MFS_AR_UNLINK: /* Hard to dupl once name gone */
@@ -997,6 +997,49 @@ mfs_auditrmstat_t *rmstatp;
         rmstatp->objtype = (u_short)mfs_v2objtype(MVFS_GETVTYPE(vp));
     }
 }
+
+/* 
+ * mvfs_audit_get_mtime is called by mfs_audit() for audit record types
+ * which include current mtime of the object.  Isolated into a subroutine
+ * to facilitate using a stack local for vattr struct
+ */
+
+STATIC MVFS_NOINLINE void
+mvfs_audit_get_mtime(
+    VNODE_T *vp,
+    struct timeval *mtime_p,
+    mvfs_thread_t *mth,
+    CALL_DATA_T *cd
+)
+{
+    int error = 0;
+    VATTR_T tmp_va; 
+
+    VATTR_NULL(&tmp_va);
+    VATTR_SET_MASK(&tmp_va, AT_MTIME);
+    MFS_INHREBIND(mth);
+
+    if (MFS_VPISMFS(vp)) {
+        BUMPSTAT(mfs_austat.au_vgetattr);
+        MFS_CHKSP(STK_MFSGETATTR);
+        error = mfs_getattr(vp, &tmp_va, 0, cd);
+    } else {
+        CLR_VNODE_T *cvp;
+        BUMPSTAT(mfs_austat.au_nvgetattr);
+        MFS_CHKSP(STK_GETATTR);	
+        MVFS_VP_TO_CVP(vp, &cvp); /* XXX non-mvfs: fail? */
+        error = MVOP_GETATTR(vp, cvp, &tmp_va, 0, cd);
+        CVN_RELE(cvp, cd);
+    }
+
+    if (!error) {
+        VATTR_GET_MTIME_TV(&tmp_va, mtime_p);
+    } else {
+        mvfs_log(MFS_LOG_ERR, "audit: Error obtaining attrs for vp %"KS_FMT_PTR_T" - %s\n", vp,  mfs_strerr(error));
+    } 
+    MVFS_FREE_VATTR_FIELDS(&tmp_va); 
+    MFS_ENBREBIND(mth);
+} 
 
 int
 mfs_audit(
@@ -1100,63 +1143,26 @@ mfs_audit(
 
     BUMPSTAT(mfs_austat.au_calls);
 
-    /* Lock the audit file struct before using sub-fields */
-
-    MVFS_LOCK(&afp->lock);
-
     /* 
-     * Do a getattr to get the DTM on the object.  We use
-     * a static vattr struct in the audit file structure to
-     * conserve stack space.  This has somewhat undesirable 
-     * attributes (auditing is single threaded over a call
-     * which may take a long time), but is the lesser of many evils.
-     * FIXME: make conditional code based on "SMALL_STACK" cpp define.
+     * For most audited operations, do a getattr to get DTM on the object. 
+     * There are several important points here:
+     *      1) VOP_GETATTR takes a lot of stack.  To save some stack,
+     *         we call mfs_getattr directly for MVFS objects
+     *         (they may call VOP_GETATTR at a lower level
+     *         to get cleartext attributes!)
+     *      2) For NFS, VOP_GETATTR() sync's all modified data to
+     *         the home node to get an uptodate mod time.  If we
+     *         did this for every write call, we might be sync'ing
+     *         every 20 bytes or so ... yeeech!  So, we do not
+     *         do the VOP_GETATTR() for writes to allow sequential
+     *         writes without syncing every one.  Similarly we skip this
+     *         for Reads which saves on getattr calls to lessen lock
+     *         contention on the View vnode.
      */
 
     if (vp) {
-
-        /* 
-         * Do getattr to get mtime.  There are several important
-         * points here:
-         * 	1) VOP_GETATTR takes a lot of stack.  To avoid
-         *         save some stack, we call mfs_getattr directly for
-         *         MFS objects (they may call VOP_GETATTR at a lower level
-         *         to get cleartext attributes!)
-         *      2) For NFS, VOP_GETATTR() sync's all modified data to
-         *         the home node to get an uptodate mod time.  If we
-         *         did this for every write call, we might be sync'ing
-         *         every 20 bytes or so ... yeeech!  So, we do not
-         *         do the VOP_GETATTR() for writes to allow sequential
-         *         writes without syncing every one.  Similarly we skip this
-         *         for Reads which saves on getattr calls to lessen lock
-         *         contention on the View vnode.
-         */
-
-        if (MDKI_AOP_KIND_NEEDS_REAL_MTIME(kind)) {
-            VATTR_SET_MASK(&afp->va, AT_MTIME);
-            MFS_INHREBIND(mth);
-            if (MFS_VPISMFS(vp)) {
-                BUMPSTAT(mfs_austat.au_vgetattr);
-                MFS_CHKSP(STK_MFSGETATTR);
-                if (mfs_getattr(vp, &afp->va, 0, cd) == 0) {
-                    VATTR_GET_MTIME_TV(&afp->va, &mtime);
-                } else {
-                    MVFS_FREE_VATTR_FIELDS(&afp->va); /* and free any NT sids copied */
-                }
-            } else {
-                CLR_VNODE_T *cvp;
-                BUMPSTAT(mfs_austat.au_nvgetattr);
-                MFS_CHKSP(STK_GETATTR);	
-                MVFS_VP_TO_CVP(vp, &cvp); /* XXX non-mvfs: fail? */
-                if (MVOP_GETATTR(vp, cvp, &afp->va, 0, cd) == 0) {
-                    VATTR_GET_MTIME_TV(&afp->va, &mtime);
-                } else {
-                    MVFS_FREE_VATTR_FIELDS(&afp->va);
-                }
-                CVN_RELE(cvp, cd);
-            }
-            MFS_ENBREBIND(mth);
-        }
+        if (MDKI_AOP_KIND_NEEDS_REAL_MTIME(kind)) 
+            mvfs_audit_get_mtime(vp, &mtime, mth, cd);
     } 
 
     /* Get the length of the char strings if any */
@@ -1164,9 +1170,14 @@ mfs_audit(
     if (nm1) len1 = STRLEN(nm1);
     else len1 = 0;
 
-    /* Check if a redundant audit record, and discard if so. */
+    /* Lock the audit file struct before using sub-fields */
 
-    if (mfs_isdupl(afp, kind, dvp, nm1, len1, vp, &afp->va)) {
+    MVFS_LOCK(&afp->lock);
+
+    /* Check if a redundant audit record, and discard if so.
+     * This check may use the mtime acquired above.  
+     */
+    if (mfs_isdupl(afp, kind, dvp, nm1, len1, vp, &mtime)) {
         BUMPSTAT(mfs_austat.au_dupl);
         goto out;
     }
@@ -1695,4 +1706,4 @@ out:
     MVFS_BUMPTIME(stime, dtime, mfs_austat.au_time);
     return;
 }
-static const char vnode_verid_mvfs_auditops_c[] = "$Id:  d95da76d.7f9f418c.9f98.f5:04:75:4a:83:68 $";
+static const char vnode_verid_mvfs_auditops_c[] = "$Id:  cdae3e5b.97eb11e3.9306.00:01:83:9c:f6:11 $";

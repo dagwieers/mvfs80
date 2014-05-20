@@ -1,4 +1,4 @@
-/* * (C) Copyright IBM Corporation 2006, 2013. */
+/* * (C) Copyright IBM Corporation 2006, 2014. */
 /*
  This program is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License as published by
@@ -380,7 +380,7 @@ typedef int mfs_class_t;
  *	The realvp continues to be protected by the mnode lock.  Marked "M".
  *
  *	The viewvp is set in mvfs_mninit_new_mnode and shouldn't change for
- *	the life of the mnode.  (There is a bit of code in mfs_makevobnode
+ *	the life of the mnode.  (There is a bit of code in mvfs_makevobnode
  *	that thinks it is updating it, but I don't think we ever hit this.)
  *	It is cleared in mvfs_mnclean.  Not marked.
  *
@@ -1932,14 +1932,15 @@ mfs_makevobrtnode(
 );
 
 EXTERN int 
-mfs_makevobnode(
+mvfs_makevobnode(
     view_vstat_t *vstatp,
     struct timeval *lvut,
     VNODE_T *vw,
     view_fhandle_t *vfhp,
     VFS_T *vfsp,
     CALL_DATA_T *cd,
-    VNODE_T **vpp
+    VNODE_T **vpp,
+    tbs_boolean_t wait_flag
 );
 
 EXTERN int 
@@ -4322,4 +4323,4 @@ EXTERN tbs_boolean_t mvfs_unload_in_progress;
 #endif
 
 #endif /* MVFS_BASE_H_ */
-/* $Id: 3edc9589.270442aa.86e4.93:9d:da:0d:4e:82 $ */
+/* $Id: ce055a10.7d4911e3.81b9.44:37:e6:71:2b:ed $ */

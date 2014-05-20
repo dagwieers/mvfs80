@@ -1,4 +1,4 @@
-/* * (C) Copyright IBM Corporation 1990, 2013. */
+/* * (C) Copyright IBM Corporation 1990, 2014. */
 /*
  This program is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License as published by
@@ -3659,7 +3659,6 @@ mvfs_changeattr(
                 PVN_TRUNC(vp, flag, VATTR_GET_SIZE(vap), oldsize,
                           MVFS_CD2CRED(cd));
             }
-
             break;
         }
         default:
@@ -4039,7 +4038,6 @@ mfs_inactive_common(
             if (MVFS_ISVTYPE(vp, VDIR)) {
                 break;
             }
-
             /* Sync dirty pages of the cleartext vnode (if any)
              * to the home node.  This is the necessary hook to try
              * to make third-party accesses work reasonably.
@@ -6979,14 +6977,15 @@ mfs_makevobrtnode(
 /* MFS_MAKEVOBNODE - make a vob vnode */
 
 int
-mfs_makevobnode(
+mvfs_makevobnode(
     view_vstat_t *vstatp,	/* Object stat record */
     struct timeval *lvut,	/* view's LVUT */
     VNODE_T *vw,	        /* View object is in (may be NULL) */
     view_fhandle_t *vfhp,	/* Optional view file handle ptr */
     VFS_T *vfsp,	        /* VFS ptr */
     CALL_DATA_T *cd,		/* callers credentials */
-    VNODE_T **vpp	        /* Returned vnode ptr */
+    VNODE_T **vpp,	        /* Returned vnode ptr */
+    tbs_boolean_t wait_flag     /* Wait for VNODE or return ENOENT? */
 )
 {
     int error;
@@ -7057,7 +7056,7 @@ mfs_makevobnode(
      * It also drops the mnode refcount acquired by mnget.
      * 
      * The nowait version of this call is only used on Linux.  On other
-     * platforms it defaults to teh standard MVFS_VNGET.  The NOWAIT version
+     * platforms it defaults to the standard MVFS_VNGET.  The NOWAIT version
      * is needed on Linux because of a race condition that exists between
      * the invalidate code and the lookup code.  If a vnode is in the process
      * of going away, the Linux code would wait for the vnode in question to
@@ -7074,12 +7073,14 @@ mfs_makevobnode(
      * the view server.  This will give the inactive a chance to complete and
      * we will then proceed properly.
      *
-     * None of our other callers should encounter this error but if they do,
-     * none of them actually reference the vnode and the next time they call
-     * vnget, it will find the NULL vnode pointer in the mnode and create the
-     * vnode then.
+     * The wait_flag was added because the rebind code was not expecting the
+     * error and so was causing ENOENT errors.  Now we only call the NOWAIT
+     * version if the caller tells us we can.
      */
-    error = MVFS_VNGET_NOWAIT(vfsp, NULL, mnp, &vp, cd);
+    if (wait_flag == TRUE)
+        error = MVFS_VNGET(vfsp, NULL, mnp, &vp, cd);
+    else
+        error = MVFS_VNGET_NOWAIT(vfsp, NULL, mnp, &vp, cd);
 
     if (!error) {
         ASSERT(vp);
@@ -7644,4 +7645,4 @@ mvfs_devadjust(dev_t dev, VNODE_T *vp)
 
 }
 
-static const char vnode_verid_mvfs_vnodeops_c[] = "$Id:  122f4969.86c94ce0.bf44.b7:0a:74:bc:a7:39 $";
+static const char vnode_verid_mvfs_vnodeops_c[] = "$Id:  cce559c0.7d4911e3.81b9.44:37:e6:71:2b:ed $";

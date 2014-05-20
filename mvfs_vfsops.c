@@ -1,4 +1,4 @@
-/* * (C) Copyright IBM Corporation 1990, 2013. */
+/* * (C) Copyright IBM Corporation 1990, 2014. */
 /*
  This program is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License as published by
@@ -2115,7 +2115,7 @@ mfs_getvnode(
 
     /*
      * Get the vnode.  
-     * See mfs_makevobnode in vnodeops for a discussion of mnode and
+     * See mvfs_makevobnode in vnodeops for a discussion of mnode and
      * vnode refcounts and how they are used.  This routine
      * decrements mnode refcount (if appropriate) and unlocks the
      * mnode.
@@ -2455,4 +2455,4 @@ mvfs_find_mount(
     MVFS_UNLOCK(&(mvdp->mvfs_mountlock));
     return result;
 }
-static const char vnode_verid_mvfs_vfsops_c[] = "$Id:  8fdc7d28.19d94263.b9e2.c2:72:1c:d1:47:81 $";
+static const char vnode_verid_mvfs_vfsops_c[] = "$Id:  cd2559d8.7d4911e3.81b9.44:37:e6:71:2b:ed $";
