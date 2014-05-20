@@ -1,4 +1,4 @@
-/* * (C) Copyright IBM Corporation 1991, 2012. */
+/* * (C) Copyright IBM Corporation 1991, 2013. */
 /*
  This program is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License as published by
@@ -53,12 +53,12 @@ mfs_clnt_free_int(
     VNODE_T *
 );
 
-EXTERN int mfs_view_getstatus(P1(void *resp));
-EXTERN XID_T mfs_view_getxid(P1(void *resp));
-EXTERN void mfs_view_setxid(P1(void *req) PN(time_t bt) PN(XID_T xid));
-EXTERN int mfs_albd_getstatus(P1(void *resp));
-EXTERN XID_T mfs_albd_getxid(P1(void *resp));
-EXTERN void mfs_albd_setxid(P1(void *req) PN(time_t bt) PN(XID_T xid));
+EXTERN int mfs_view_getstatus(void *resp);
+EXTERN XID_T mfs_view_getxid(void *resp);
+EXTERN void mfs_view_setxid(void *req, time_t bt, XID_T xid);
+EXTERN int mfs_albd_getstatus(void *resp);
+EXTERN XID_T mfs_albd_getxid(void *resp);
+EXTERN void mfs_albd_setxid(void *req, time_t bt, XID_T xid);
 STATIC ks_uint32_t mvfs_get_boottime(void);
 
 #if defined(MVFS_COMMON_ALLOC_XID)
@@ -282,7 +282,7 @@ mvfs_clnt_get(
 
     BUMPSTAT(mfs_clntstat.clntget);
     if (view)
-        BUMPVSTATV(view, clntstat.clntget);
+        BUMP_VCLNTSTATV(view, clntstat.clntget);
 
     retrans = (svr->down) ? 1 : rinfo->retries;
 
@@ -367,15 +367,14 @@ getclient:
 #ifdef ERESTARTSYS
           case ERESTARTSYS:
 #endif
-	    mvfs_log(MFS_LOG_ERR,
-		     "cannot allocate RPC client handle, giving up (err %d)\n",
-                     error);
+            mvfs_log(MFS_LOG_ERR,
+                     "cannot allocate RPC client handle, giving up (err %d)\n", error);
             *client_p = NULL;		/* This is bad! */
             return error;
         }
         BUMPSTAT(mfs_clntstat.clntcreate);
         if (view)
-            BUMPVSTATV(view, clntstat.clntcreate);
+            BUMP_VCLNTSTATV(view, clntstat.clntcreate);
         found = 0;
         if ((mcdp->mvfs_rpc.mvfs_client_cache_family ==
               svr->addr.ks_ss_s.sa_family) ||
@@ -441,7 +440,7 @@ VNODE_T *view;
 
     BUMPSTAT(mfs_clntstat.clntfree);
     if (view)
-        BUMPVSTATV(view, clntstat.clntfree);
+        BUMP_VCLNTSTATV(view, clntstat.clntfree);
 
     /*
      * Always free the client resources
@@ -482,7 +481,7 @@ VNODE_T *view;
     MDKI_CLNTKUDP_DESTROY(client);
     BUMPSTAT(mfs_clntstat.clntdestroy);
     if (view)
-        BUMPVSTATV(view, clntstat.clntdestroy);
+        BUMP_VCLNTSTATV(view, clntstat.clntdestroy);
 }
 
 /*
@@ -1639,7 +1638,7 @@ mfscall_int(
 
     BUMPSTAT(mfs_clntstat.mfscall);
     if (view) {
-        BUMPVSTATV(view, clntstat.mfscall);
+        BUMP_VCLNTSTATV(view, clntstat.mfscall);
     }
     /* Count ops to view, no counts kept for albd */
     if (trait == &mfs_vwcallstruct) {
@@ -1722,7 +1721,7 @@ retry_call:
                    &saved_holdmask, !(rinfo->nointr), cred, *status);
     BUMPSTAT(mfs_clntstat.clntcalls);
     if (view) {
-        BUMPVSTATV(view, clntstat.clntcalls);
+        BUMP_VCLNTSTATV(view, clntstat.clntcalls);
     }
     /* Parse RPC return status */
 
@@ -1811,7 +1810,7 @@ retry_call:
     case RPC_CANTDECODEARGS:
         BUMPSTAT(mfs_clntstat.mfsfail);
         if (view) {
-            BUMPVSTATV(view, clntstat.mfsfail);
+            BUMP_VCLNTSTATV(view, clntstat.mfsfail);
         }
         error = 0; /* We fall thru and cause extraction of rpcerr.re_errno */
                    /* ECOMM is not defined for the hp400. */
@@ -1820,7 +1819,7 @@ retry_call:
     case RPC_INTR:
         BUMPSTAT(mfs_clntstat.mfsintr);
         if (view) {
-            BUMPVSTATV(view, clntstat.mfsintr);
+            BUMP_VCLNTSTATV(view, clntstat.mfsintr);
         }
         error = EINTR;
         break;
@@ -1847,7 +1846,7 @@ retry_call:
             }
             BUMPSTAT(mfs_clntstat.clntretries);
             if (view) {
-                BUMPVSTATV(view, clntstat.clntretries);
+                BUMP_VCLNTSTATV(view, clntstat.clntretries);
             }
             /*
              * Return to higher level if it supports rebinding
@@ -1984,4 +1983,4 @@ errout:
     KMEM_FREE(alloc_unitp, sizeof(*alloc_unitp));
     return (error);
 }
-static const char vnode_verid_mvfs_rpcutl_c[] = "$Id:  f0a0d462.1f9c11e2.8cfc.00:01:83:9c:f6:11 $";
+static const char vnode_verid_mvfs_rpcutl_c[] = "$Id:  d7f0f17c.e2e34c51.b366.67:7b:d4:41:c7:ef $";

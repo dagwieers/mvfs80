@@ -97,19 +97,28 @@ mvfs_mninit_new_mnode(
 );
 
 STATIC void 
-mvfs_mndestroy_list(void);
+mvfs_mndestroy_list(
+    CALL_DATA_T *cd
+);
 
 STATIC void
-mvfs_mndestroy(mfs_mnode_t *mnp);
+mvfs_mndestroy(
+    mfs_mnode_t *mnp,
+    CALL_DATA_T *cd
+);
 
 STATIC void
-mvfs_mnclean(mfs_mnode_t *mnp);
+mvfs_mnclean(mfs_mnode_t *mnp,
+    CALL_DATA_T *cd
+);
 
 STATIC void
 mvfs_mnfree(mfs_mnode_t *mnp);
 
 STATIC void 
-mvfs_mnfreelist_mgmt(void);
+mvfs_mnfreelist_mgmt(
+    CALL_DATA_T *cd
+);
 
 STATIC void
 mvfs_mnhash(mfs_mnode_t *mnp);
@@ -167,7 +176,8 @@ STATIC ks_int32_t
 mvfs_compute_mnmax(ks_int32_t scale_factor);
 
 STATIC void
-mvfs_sync_mnode(mfs_mnode_t *mnp);
+mvfs_sync_mnode(mfs_mnode_t *mnp,
+                CALL_DATA_T *cd);
 
 STATIC tbs_boolean_t
 mvfs_ensure_flushable_mnode(
@@ -1889,7 +1899,9 @@ int mnum;
 	if (mnp->mn_view.pvstat == (struct mvfs_pvstat *)NULL) {
 	    return (0);
 	}
-	MVFS_PVSTATLOCK_INIT(mnp->mn_view.pvstat->mvfs_pvstatlock);
+        MVFS_PVCLNT_STATLOCK_INIT(mnp->mn_view.pvstat->mvfs_pvclnt_statlock);
+        MVFS_PVAC_STATLOCK_INIT(mnp->mn_view.pvstat->mvfs_pvac_statlock);
+        MVFS_PVDNC_STATLOCK_INIT(mnp->mn_view.pvstat->mvfs_pvdnc_statlock);
 	mvfs_pview_stat_zero(mnp->mn_view.pvstat);
 	break;
       case MFS_VOBRTCLAS:
@@ -1914,8 +1926,10 @@ int mnum;
 /*ARGSUSED*/
 
 void
-mfs_mnrele(mnp)
-mfs_mnode_t *mnp;
+mfs_mnrele(
+    mfs_mnode_t *mnp,
+    CALL_DATA_T *cd
+)
 {
     int call_destroy = 0;
     int runfree = 0;
@@ -1997,13 +2011,13 @@ mfs_mnode_t *mnp;
      * above would deadlock by attempting to take the hash chain and 
      * mfs_mnlock locks with the mnode header lock held.
      */
-    if (call_destroy) mvfs_mndestroy_list();
+    if (call_destroy) mvfs_mndestroy_list(cd);
 
     /* 
      * Call routine to "manage" the freelist.
      */
 
-    if (runfree) mvfs_mnfreelist_mgmt();
+    if (runfree) mvfs_mnfreelist_mgmt(cd);
 
     return;
 }
@@ -2016,9 +2030,10 @@ mfs_mnode_t *mnp;
  */
 
 STATIC void
-mvfs_mndestroy_list(void)
+mvfs_mndestroy_list(
+    CALL_DATA_T *cd
+)
 {
-
     register mfs_mnode_t *mnp;
     mvfs_mnode_data_t *mndp = MDKI_MNODE_GET_DATAP();
 
@@ -2027,10 +2042,9 @@ mvfs_mndestroy_list(void)
 				!= (mfs_mnode_t *)&(mndp->mvfs_mndestroylist)) {
 	/* The mvfs_mndestroylock is dropped and re-obtained by mvfs_mndestroy,
 	 * so the list can change. */
-	mvfs_mndestroy(mnp);
+	mvfs_mndestroy(mnp, cd);
     }
     MVFS_UNLOCK(&(mndp->mvfs_mndestroylock));
-
 }
 
 /*
@@ -2040,8 +2054,10 @@ mvfs_mndestroy_list(void)
  */
 
 STATIC void
-mvfs_mndestroy(mnp)
-register mfs_mnode_t *mnp;
+mvfs_mndestroy(
+    register mfs_mnode_t *mnp,
+    CALL_DATA_T *cd
+)
 {
     VFS_T *vfsp;
     SPL_T s;
@@ -2112,7 +2128,7 @@ register mfs_mnode_t *mnp;
     if (vfsp != NULL && MFS_ISLOOP(mnp))
 	MVFS_FREE_LOOPCLAS_VFS(vrdp, vfsp);
 
-    mvfs_mnclean(mnp);
+    mvfs_mnclean(mnp, cd);
 
     /* Back pointer must be NULL here e.g. mnode not "attached" to vnode */
     ASSERT(mnp->mn_hdr.vp == NULL);
@@ -2134,8 +2150,10 @@ register mfs_mnode_t *mnp;
  */
 
 STATIC void
-mvfs_mnclean(mnp)
-register mfs_mnode_t *mnp;
+mvfs_mnclean(
+    register mfs_mnode_t *mnp,
+    CALL_DATA_T *cd
+)
 {
     int len;
 
@@ -2164,7 +2182,7 @@ register mfs_mnode_t *mnp;
 	case MFS_VIEWDIRCLAS:
 	    /* Fixme: can't do this here - no vp! */
 	    if (mnp->mn_hdr.vp)
-		mfs_ramdir_purge(mnp->mn_hdr.vp, RELEASE);
+		mfs_ramdir_purge(mnp->mn_hdr.vp, RELEASE, cd);
 	    len = mnp->mn_ramdir.max * sizeof(struct mfs_ramdirent);
 	    if (mnp->mn_ramdir.ents)
 		KMEM_FREE(mnp->mn_ramdir.ents, len);
@@ -2189,7 +2207,12 @@ register mfs_mnode_t *mnp;
                  * added in the future, include an assert statement here on the
                  * pvstatlock.
                  */
-                MVFS_PVSTATLOCK_FREE(mnp->mn_view.pvstat->mvfs_pvstatlock);
+                MVFS_PVCLNT_STATLOCK_FREE(
+                        mnp->mn_view.pvstat->mvfs_pvclnt_statlock);
+                MVFS_PVAC_STATLOCK_FREE(
+                        mnp->mn_view.pvstat->mvfs_pvac_statlock);
+                MVFS_PVDNC_STATLOCK_FREE(
+                        mnp->mn_view.pvstat->mvfs_pvdnc_statlock);
 		KMEM_FREE(mnp->mn_view.pvstat, sizeof(*mnp->mn_view.pvstat));
 		mnp->mn_view.pvstat = NULL;
 	    }
@@ -2203,7 +2226,7 @@ register mfs_mnode_t *mnp;
 	    if (mnp->mn_vob.rmv_name) 
 		PN_STRFREE(mnp->mn_vob.rmv_name);
 	    if (mnp->mn_vob.rmv_dvp) {
-		VN_RELE(mnp->mn_vob.rmv_dvp);
+		ATRIA_VN_RELE(mnp->mn_vob.rmv_dvp, cd);
 		mnp->mn_vob.rmv_dvp = NULL;
 	    }
 	    if (mnp->mn_vob.rmv_cred) {
@@ -2248,13 +2271,13 @@ register mfs_mnode_t *mnp;
             "new cltxt: unexpected NFSv4 master vnode in cleartext cache. master="
              KS_FMT_PTR_T", realvp="KS_FMT_PTR_T"\n",
              mnp->mn_hdr.realvp_master, mnp->mn_hdr.realvp);
-        CVN_RELE(mnp->mn_hdr.realvp_master);
+        CVN_RELE(mnp->mn_hdr.realvp_master, mth);
         mnp->mn_hdr.realvp_master = NULL;
     }
 #endif
 
     if (mnp->mn_hdr.realvp) {
-	CVN_RELE(mnp->mn_hdr.realvp);
+	CVN_RELE(mnp->mn_hdr.realvp, cd);
 	mnp->mn_hdr.realvp = NULL;
 	if (MFS_ISVOB(mnp))
 	    MVFS_RELEASE_CREDLIST(mnp);
@@ -2263,7 +2286,7 @@ register mfs_mnode_t *mnp;
 	FREELOCK(MCILOCK_ADDR(mnp));
     }
     if (mnp->mn_hdr.viewvp) {
-	VN_RELE(mnp->mn_hdr.viewvp);
+	ATRIA_VN_RELE(mnp->mn_hdr.viewvp, cd);
 	mnp->mn_hdr.viewvp = NULL;
     }
 }
@@ -2290,7 +2313,9 @@ mvfs_mnfree(
  */
 
 STATIC void
-mvfs_mnfreelist_mgmt(void)
+mvfs_mnfreelist_mgmt(
+    CALL_DATA_T *cd
+)
 {
     mfs_mnode_t *mnp;
     int vobf_count, vobf_npc;
@@ -2385,14 +2410,14 @@ mvfs_mnfreelist_mgmt(void)
      * Process these destroys under the mvfs_mndestroylock so there is no
      * lock contention with mvfs_vobfree hashed locks.
      */
-    mvfs_mndestroy_list();
+    mvfs_mndestroy_list(cd);
     
     /*
      * While we are here freeing stuff, drop the cleartexts back
      * down to the min, even if not over the max yet.  This
      * helps us to run freelist mgmt less.
      */
-    mvfs_mnflush_cvpfreelist(MVFS_MN_CVPFLUSH_LOWMARK);
+    mvfs_mnflush_cvpfreelist(MVFS_MN_CVPFLUSH_LOWMARK, cd);
 
     MVFS_LOCK(&(mndp->mvfs_vobfreelock));
     mndp->mvfs_mnfreelist_mgmt_ip = 0;	/* we are done reducing the freelist */
@@ -2401,7 +2426,8 @@ mvfs_mnfreelist_mgmt(void)
 }
 
 void
-mvfs_mnflush_cvpfreelist(int type)
+mvfs_mnflush_cvpfreelist(int type,
+                         CALL_DATA_T *cd)
 {
 
     mfs_mnode_t *mnp;
@@ -2548,7 +2574,7 @@ mvfs_mnflush_cvpfreelist(int type)
                        "new cltxt: unexpected NFSv4 master vnode in cleartext cache. master="
                         KS_FMT_PTR_T", realvp="KS_FMT_PTR_T"\n",
                         mnp->mn_hdr.realvp_master, mnp->mn_hdr.realvp);
-                    CVN_RELE(mnp->mn_hdr.realvp_master);
+                    CVN_RELE(mnp->mn_hdr.realvp_master, mth);
                     mnp->mn_hdr.realvp_master = NULL;
 	        }
 #endif
@@ -2570,7 +2596,7 @@ mvfs_mnflush_cvpfreelist(int type)
      * the vnode ptrs we took out of the mnodes.
      */
     while (--cvpcnt >= 0) {
-	CVN_RELE(cvplist[cvpcnt]);
+	CVN_RELE(cvplist[cvpcnt], cd);
     }
 
     if (cvplist != &stack_cvplist[0])
@@ -2665,8 +2691,10 @@ mvfs_cache_usage_t *usage;
  */
 
 int
-mvfs_mn_setcaches(szp)
-mvfs_cache_sizes_t *szp;
+mvfs_mn_setcaches(
+    mvfs_cache_sizes_t *szp,
+    CALL_DATA_T *cd
+)
 {
     int grew;
     MVFS_WATERMARK_TYPE vobfreemax, vobfreemin, cvpfreemax, cvpfreemin;
@@ -2746,7 +2774,7 @@ mvfs_cache_sizes_t *szp;
     mcdp->mvfs_cvpfreemax = cvpfreemax;
     MVFS_UNLOCK(&(mndp->mvfs_vobfreelock));
 
-    mvfs_mnfreelist_mgmt();
+    mvfs_mnfreelist_mgmt(cd);
     return 0;
 }
 
@@ -3287,7 +3315,8 @@ mvfs_mn_compute_caches(
  */
 void
 mvfs_mnsyncmnodes(
-    VFS_T *vfsp
+    VFS_T *vfsp,
+    CALL_DATA_T *cd
 )
 {
 
@@ -3459,7 +3488,7 @@ mvfs_mnsyncmnodes(
 	 */
 	for (i = 0; i < count; i++) {
 	    /* each mnode is unlocked and rele'ed. */
-	    mvfs_sync_mnode(mnplist[i]);
+	    mvfs_sync_mnode(mnplist[i], cd);
 	}
 
     }
@@ -3483,7 +3512,8 @@ mvfs_mnsyncmnodes(
  */
 
 STATIC void
-mvfs_sync_mnode(mfs_mnode_t *mnp)
+mvfs_sync_mnode(mfs_mnode_t *mnp,
+                CALL_DATA_T *cd)
 {
     VNODE_T *vp;
     CRED_T *cred;
@@ -3495,8 +3525,10 @@ mvfs_sync_mnode(mfs_mnode_t *mnp)
      * Get the vnode associated with this mnode.  MVFS_VNGET unlocks and
      * releases the mnode.
      * FIXME: needs nowait option 
+     * We do not call MVFS_VNGET_NOWAIT (which only exists on Linux for now)
+     * because what it waits for is for the inactive to complete its processing.
      */
-    error = MVFS_VNGET(mnp->mn_hdr.vfsp, NULL, mnp, &vp);
+    error = MVFS_VNGET(mnp->mn_hdr.vfsp, NULL, mnp, &vp, cd);
     if (error) {
 	mvfs_logperr(MFS_LOG_DEBUG, error, 
 		     "sync: can't sync vob %s dbid 0x%x\n", 
@@ -3508,7 +3540,7 @@ mvfs_sync_mnode(mfs_mnode_t *mnp)
     ASSERT(vp != NULL);
 
     if (!MLOCK_NOWAIT(mnp)) {
-	VN_RELE(vp);
+	ATRIA_VN_RELE(vp, cd);
 	return;
     }
 
@@ -3520,20 +3552,20 @@ mvfs_sync_mnode(mfs_mnode_t *mnp)
 	mvfs_log(MFS_LOG_INFO, "sync: no cred: vw=%s vob=%s dbid=0x%x\n",
 		 mfs_vp2vw(vp), mfs_vp2dev(vp), mnp->mn_hdr.fid.mf_dbid);
 	MUNLOCK(mnp);
-	VN_RELE(vp);
+	ATRIA_VN_RELE(vp, cd);
 	return;		/* Skip this vnode */
     }
     MDKI_CRHOLD(cred);
     MUNLOCK(mnp);
 
     /* Flush MFS vnode first (with mnode unlocked).  */
-    (void) PVN_FLUSH(vp, MFS_PVN_FLUSH, cred);
+    (void) PVN_FLUSH(vp, MFS_PVN_FLUSH, cd);
 
     /* Release hold on cred */
     MDKI_CRFREE(cred);
 	 
     /* Release hold on vnode */
-    VN_RELE(vp);
+    ATRIA_VN_RELE(vp, cd);
     return;
 }
 
@@ -3866,7 +3898,9 @@ mvfs_mnclear_logbits(void)
  */
 
 void
-mfs_mnflush(void)
+mfs_mnflush(
+    CALL_DATA_T *cd
+)
 {
     int hash_val;
     LOCK_T *flplockp;
@@ -3874,7 +3908,7 @@ mfs_mnflush(void)
     register mfs_mnode_t *mnp;
     mvfs_mnode_data_t *mndp = MDKI_MNODE_GET_DATAP();
 
-    MVFS_FLUSH_MAPPINGS(NULL);		/* toss any pages incore on all VOBs */
+    MVFS_FLUSH_MAPPINGS(NULL, cd);		/* toss any pages incore on all VOBs */
 
     /* 
      * Go through each vob freelist hash chain and release all the VOB mnodes 
@@ -3909,7 +3943,7 @@ mfs_mnflush(void)
 	MNVOBFREEHASH_MVFS_UNLOCK(&flplockp);
     }
 
-    mvfs_mndestroy_list();
+    mvfs_mndestroy_list(cd);
 
 }
 
@@ -3918,8 +3952,10 @@ mfs_mnflush(void)
  */
 
 void
-mfs_mnflushvfs(vfsp)
-VFS_T *vfsp;
+mfs_mnflushvfs(
+    VFS_T *vfsp,
+    CALL_DATA_T *cd
+)
 {
     int hash_val;
     LOCK_T *flplockp;
@@ -3927,7 +3963,7 @@ VFS_T *vfsp;
     register mfs_mnode_t *mnp;
     mvfs_mnode_data_t *mndp = MDKI_MNODE_GET_DATAP();
 
-    MVFS_FLUSH_MAPPINGS(vfsp);		/* toss any pages incore */
+    MVFS_FLUSH_MAPPINGS(vfsp, cd);		/* toss any pages incore */
 
     BUMPSTAT(mfs_mnstat.mnflushvfscnt);
 
@@ -3976,7 +4012,7 @@ VFS_T *vfsp;
 	MNVOBFREEHASH_MVFS_UNLOCK(&flplockp);
     }
 
-    mvfs_mndestroy_list();
+    mvfs_mndestroy_list(cd);
 }
 
 /*
@@ -3984,8 +4020,10 @@ VFS_T *vfsp;
  */
 
 void
-mfs_mnflushvw(vw)
-VNODE_T *vw;
+mfs_mnflushvw(
+    VNODE_T *vw,
+    CALL_DATA_T *cd
+)
 {
     int hash_val;
     LOCK_T *flplockp;
@@ -3995,7 +4033,7 @@ VNODE_T *vw;
 
     BUMPSTAT(mfs_mnstat.mnflushvwcnt);
 
-    MVFS_FLUSH_MAPPINGS_VW(vw);
+    MVFS_FLUSH_MAPPINGS_VW(vw, cd);
 
    /*
      * Go through each vob freelist hash chain and release all the VOB mnodes
@@ -4043,10 +4081,10 @@ VNODE_T *vw;
 	MNVOBFREEHASH_MVFS_UNLOCK(&flplockp);
     }
 
-    mvfs_mndestroy_list();
+    mvfs_mndestroy_list(cd);
 
     /* Release all DNC entries that apply to this vw */
-    mfs_dnc_flushvw(vw);
+    mfs_dnc_flushvw(vw, cd);
 
 }
 
@@ -4139,4 +4177,4 @@ mvfs_mnverify_destroy(void)
 
 	return (cnt);
 }
-static const char vnode_verid_mvfs_mnode_c[] = "$Id:  b259770c.5b6211e2.8064.00:01:83:9c:f6:11 $";
+static const char vnode_verid_mvfs_mnode_c[] = "$Id:  aa04bbe7.11184fa4.8c62.3b:55:4d:a6:7d:0a $";

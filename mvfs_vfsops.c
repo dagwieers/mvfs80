@@ -88,6 +88,9 @@ mvfs_vobmount_init(void);
 STATIC void
 mvfs_vobmount_free(void);
 
+STATIC void
+mvfs_misc_free(void);
+
 STATIC int
 mvfs_find_devnum(
     int mmi_minor, 
@@ -251,7 +254,7 @@ mvfs_vobmount_free(void)
  * Clean up various structures no longer needed once we unmount all VOBs and
  * viewroot. 
  */
-void
+STATIC void
 mvfs_misc_free(void)
 {
     mvfs_common_data_t *mcdp = MDKI_COMMON_GET_DATAP();
@@ -726,11 +729,12 @@ u_long *cookiep;
  */
 
 int
-mfs_register_mount(mnt_data, mnt_datalen, cred, callinfo)
-caddr_t mnt_data;
-size_t mnt_datalen;
-CRED_T *cred;
-MVFS_CALLER_INFO *callinfo;
+mfs_register_mount(
+    caddr_t mnt_data,
+    size_t mnt_datalen,
+    CALL_DATA_T *cd,
+    MVFS_CALLER_INFO *callinfo
+)
 {
     VFS_T *vfsp;
     int error;
@@ -750,7 +754,7 @@ MVFS_CALLER_INFO *callinfo;
 
     /* Now, call the mount subr */
 
-    error = mfs_vmount_subr(vfsp, 0, NULL, 0, mnt_data, mnt_datalen, cred,
+    error = mfs_vmount_subr(vfsp, 0, NULL, 0, mnt_data, mnt_datalen, cd,
                             callinfo);
     if (error != 0) {
 	KMEM_FREE(vfsp, sizeof(*vfsp));
@@ -759,15 +763,16 @@ MVFS_CALLER_INFO *callinfo;
 }
 
 int
-mfs_unregister_mount(vfsp, cred)
-VFS_T *vfsp;
-CRED_T *cred;
+mfs_unregister_mount(
+    VFS_T *vfsp,
+    CALL_DATA_T *cd
+)
 {
     int error;
 
     /* Try the unmount first */
 
-    error = mfs_vunmount(vfsp, cred);
+    error = mfs_vunmount(vfsp, cd);
     if (error) return(error);
 
     /* Now that we are unmounted, free up the VFS struct */
@@ -779,8 +784,9 @@ CRED_T *cred;
 }
 
 int
-mfs_unregister_all_vobs(cred)
-CRED_T *cred;
+mfs_unregister_all_vobs(
+    CALL_DATA_T *cd
+)
 {
     int i;
     VFS_T *vfsp;
@@ -795,7 +801,7 @@ CRED_T *cred;
     for (i=0; i <= mvdp->mfs_vobmount_hwm; i++) {
 	vfsp = mvdp->mfs_vobmounts[i];
         if (vfsp == NULL) continue;
-	error = mfs_unregister_mount(vfsp, cred);
+	error = mfs_unregister_mount(vfsp, cd);
 	if (error) {
 	    some_error = error;
 	    mvfs_log(MFS_LOG_WARN, "trouble unregistering mount %d%s\n",
@@ -811,16 +817,16 @@ CRED_T *cred;
  * Set up mount info record and attach it to vfs struct.
  */
 int
-mfs_vmount_subr(vfsp, mvp, path, flags, data, datalen, acred, callinfo)
-VFS_T *vfsp;	/* Our vfs ptr (mount tab) */
-VNODE_T *mvp;	/* mount point vnode */
-char *path;		/* Pathname of special file */
-int flags;		/* flags to the mount */
-caddr_t data;		/* data args */
-size_t datalen;		/* data args length */
-CRED_T *acred;		/* acred may be NULL for pre-SVR4 wrappers */
-MVFS_CALLER_INFO *callinfo; /* Caller info (irp info)    */
-			/* unused since Clearcase NT port */
+mfs_vmount_subr(
+    VFS_T *vfsp,	/* Our vfs ptr (mount tab) */
+    VNODE_T *mvp,	/* mount point vnode */
+    char *path,		/* Pathname of special file */
+    int flags,		/* flags to the mount */
+    caddr_t data,		/* data args */
+    size_t datalen,		/* data args length */
+    CALL_DATA_T *acd,		/* acred may be NULL for pre-SVR4 wrappers */
+    MVFS_CALLER_INFO *callinfo /* Caller info (irp info)    */
+)
 {
     int error;			/* error number */
     VNODE_T *rtvp;		/* the server's root */
@@ -834,7 +840,6 @@ MVFS_CALLER_INFO *callinfo; /* Caller info (irp info)    */
     dev_t major_num;
     int nvminor_num;
     dev_t nvmajor_num;
-    int device_attached = FALSE;
     tbs_boolean_t saved_largeinit = FALSE;
     tbs_boolean_t mvfs_misc_init_done = FALSE;
     VFS_T *canary;
@@ -955,6 +960,18 @@ MVFS_CALLER_INFO *callinfo; /* Caller info (irp info)    */
 #endif
         mvfs_init_state = MVFS_INIT_COMPLETE;
     }
+
+#ifdef MVFS_HAS_DELAYED_PROCESSING
+    /*
+     * At this point, the mvfs_misc_init routine was already called and
+     * it is safe to get the current mvfs_thread_t structure if necessary.
+     * It is only in the delayed processing case that we care about the
+     * thread structure.  
+     */
+    if (acd->thr == NULL)
+        acd->thr = mvfs_mythread(NULL);
+#endif
+
     /* After this point, any error should cleanup everything we've done above
     ** and put mvfs_init_state back to MVFS_INIT_PHASE1 (which is what it must
     ** have been since we checked for MVFS_NOT_INITIALIZED when we started this
@@ -1131,26 +1148,26 @@ MVFS_CALLER_INFO *callinfo; /* Caller info (irp info)    */
         /* Make the special view root node and fill it in */
 
         error = mfs_makespecnode(MFS_VIEWDIRCLAS, (VNODE_T *)NULL, 
-			(void *)NULL, vfsp, &rtvp);
+			(void *)NULL, vfsp, &rtvp, acd);
         if (error) goto errout;
         MVFS_SET_VROOT(rtvp);
 
         /* Add "." and "..".  Need an extra hold for each dirent */
 	 
 	VN_HOLD(rtvp);
-  	(void) mfs_ramdir_add(rtvp, ".", rtvp, &num);
+  	(void) mfs_ramdir_add(rtvp, ".", rtvp, &num, acd);
 	VN_HOLD(rtvp);
-	(void) mfs_ramdir_add(rtvp, "..", rtvp, &num);
+	(void) mfs_ramdir_add(rtvp, "..", rtvp, &num, acd);
         MVFS_INCREMENT_LINK(rtvp);
 
 	/* Add the ".specdev" object for ioctl's */
 
 	error = mfs_makespecnode(MFS_SDEVCLAS, (VNODE_T *)NULL,
-			(void *)NULL, vfsp, &svp);
+			(void *)NULL, vfsp, &svp, acd);
 	if (!error) {
 	    /* Add to view root dir.  Use makespecnode hold count for
 	       this ptr, no extra one needed. */
-	    (void) mfs_ramdir_add(rtvp, MVFS_SPECDEV, svp, &num);
+	    (void) mfs_ramdir_add(rtvp, MVFS_SPECDEV, svp, &num, acd);
 	}
 
         /* Now set up the flags and root vnode in the mount point. */
@@ -1357,7 +1374,7 @@ MVFS_CALLER_INFO *callinfo; /* Caller info (irp info)    */
      * point w/ a view context.
      */
     
-    error = mfs_makevobrtnode(NULL, vfsp, &rtvp);
+    error = mfs_makevobrtnode(NULL, vfsp, &rtvp, acd);
     if (error) goto errout;
 
     /* We have made an inode.  Nothing must allow us to fail now
@@ -1388,6 +1405,7 @@ out:
     if (error) {
         if (mmi) {
             FREESPLOCK(mmi->mmi_rclock);
+
             mfs_svrdestroy(&mmi->mmi_svr);
 	    if (mmi->mmi_mntpath) STRFREE(mmi->mmi_mntpath);
 	    if (mmi->mmi_hmsuffix) STRFREE(mmi->mmi_hmsuffix);
@@ -1454,9 +1472,10 @@ out:
  * mfs_vunmount vfsop
  */
 int
-mfs_vunmount(vfsp, acred)
-VFS_T *vfsp;
-CRED_T *acred;		/* Cred may be NULL from pre-SVR4 wrappers */
+mfs_vunmount(
+    VFS_T *vfsp,
+    CALL_DATA_T *cd		/* Cred may be NULL from pre-SVR4 wrappers */
+)
 {
     VNODE_T *rtvp;		/* Root vnode ptr */
     struct mfs_mntinfo *mmi;	/* Mount info */
@@ -1499,8 +1518,8 @@ CRED_T *acred;		/* Cred may be NULL from pre-SVR4 wrappers */
      */
 
     if (MFS_ISVIEWSVRMNT(mmi)) {
-	mfs_dncflush();		/* Flush name cache - it HOLDS views */
-	mfs_mnflush();		/* Flush all vobs, viewsvr mount */
+	mfs_dncflush(cd);		/* Flush name cache - it HOLDS views */
+	mfs_mnflush(cd);		/* Flush all vobs, viewsvr mount */
 
 	/* 
          * Check that each view has only 1 ref, and get total count
@@ -1529,7 +1548,7 @@ CRED_T *acred;		/* Cred may be NULL from pre-SVR4 wrappers */
          * Passes all refcnt checks - now PURGE the contents
          * of the RAMDIR.
          */
-	mfs_ramdir_purge(mmi->mmi_rootvp, RELEASE);
+	mfs_ramdir_purge(mmi->mmi_rootvp, RELEASE, cd);
     }
 	
     /* 
@@ -1537,11 +1556,11 @@ CRED_T *acred;		/* Cred may be NULL from pre-SVR4 wrappers */
      * which may be invalid after this unmount.
      */
 
-    mvfs_dnc_flushvfs(vfsp);
+    mvfs_dnc_flushvfs(vfsp, cd);
 
     /* Invalidate cached mnodes */
 
-    mfs_mnflushvfs(vfsp);	/* Uncache all idle vnodes */
+    mfs_mnflushvfs(vfsp, cd);	/* Uncache all idle vnodes */
 
     /* Make sure the mount point isn't busy. */
 
@@ -1578,9 +1597,9 @@ CRED_T *acred;		/* Cred may be NULL from pre-SVR4 wrappers */
         MVFS_DECREMENT_LINK(rtvp);
     }
 
-    VN_RELE(rtvp);
+    ATRIA_VN_RELE(rtvp, cd);
     mmi->mmi_rootvp = NULL;
-    mfs_mnflushvfs(vfsp);	/* Could be left in freelist */
+    mfs_mnflushvfs(vfsp, cd);	/* Could be left in freelist */
 
     /* Release the minor device(s) allocated for this mount
        and increment the mount generation number so caches
@@ -1604,7 +1623,7 @@ CRED_T *acred;		/* Cred may be NULL from pre-SVR4 wrappers */
          * need a viewroot in order to call some of the log file
          * internal functions (e.g. MVOP_WRITE_KERNEL())
          */
-        mvfs_logfile_close();
+        mvfs_logfile_close(cd);
     } else {
         mvdp->mfs_vobmounts[mmi->mmi_minor] = NULL;	/* Clear vfs table */
     }
@@ -1661,14 +1680,24 @@ errout:
  */
 
 int
-mfs_vstatfs(vfsp, sbp)
-register VFS_T *vfsp;
-STATVFS_T *sbp;
+mfs_vstatfs(
+    register VFS_T *vfsp,
+    STATVFS_T *sbp
+)
+{
+    return(mvfs_vstatfs_common(vfsp, sbp, (CALL_DATA_T *)NULL));
+}
+
+int
+mvfs_vstatfs_common(
+    register VFS_T *vfsp,
+    STATVFS_T *sbp,
+    CALL_DATA_T *cd
+)
 {
     int error;
     struct mfs_mntinfo *mmi;
     CLR_VNODE_T *cvp;
-    CRED_T *cred;
 
     mvfs_viewroot_data_t *vrdp = MDKI_VIEWROOT_GET_DATAP();
 
@@ -1686,7 +1715,7 @@ STATVFS_T *sbp;
     if (mmi->mmi_mnttype == MFS_VIEWSVRMNT) {
 	if (vfsp == vrdp->mfs_viewroot_vfsp) {
             MDB_VFSLOG((MFS_VSTATFS, "real viewroot, using ROOTDIR\n"));
-	    error = MVFS_STATFS(ROOTDIR->v_vfsp, CLR_ROOTDIR, sbp);  
+	    error = MVFS_STATFS(ROOTDIR->v_vfsp, CLR_ROOTDIR, sbp, cd);
             STATVFS_RESET_FLAGS(sbp);
 	    STATVFS_FILL(sbp);
 	} else {
@@ -1696,20 +1725,18 @@ STATVFS_T *sbp;
              */
             MDB_VFSLOG((MFS_VSTATFS, "cloned viewroot %"KS_FMT_PTR_T", using ROOTDIR\n",
                         vfsp));
-            error = MVFS_STATFS(ROOTDIR->v_vfsp, CLR_ROOTDIR, sbp);   
+            error = MVFS_STATFS(ROOTDIR->v_vfsp, CLR_ROOTDIR, sbp, cd);
 	    STATVFS_FILL(sbp);
         }
 
     } else {
         /* Not VIEWSVRMNT */
-        cred = MVFS_DUP_DEFAULT_CREDS();
   	error = LOOKUP_STORAGE_FILE(TRUE,
 			MFS_STRBUFPN_PAIR_GET_KPN(&mmi->mmi_svr.lpn).s, 
-			NULL, &cvp, cred);
-	MDKI_CRFREE(cred);
+			NULL, &cvp, cd);
 	if (!error) {
-	    error = MVFS_STATFS(MVFS_CVP_TO_VP(cvp)->v_vfsp, cvp, sbp);
-	    CVN_RELE(cvp);
+	    error = MVFS_STATFS(MVFS_CVP_TO_VP(cvp)->v_vfsp, cvp, sbp, cd);
+	    CVN_RELE(cvp, cd);
         }
 	STATVFS_FILL(sbp);
     }
@@ -1807,7 +1834,7 @@ extern void mfs_prkmem(P_NONE);
  */
 
 void
-mfs_periodic_maintenance(P_NONE)
+mfs_periodic_maintenance(CALL_DATA_T *cd)
 {
     VNODE_T *rootvp;
     mvfs_viewroot_data_t *vrdp;
@@ -1851,8 +1878,8 @@ mfs_periodic_maintenance(P_NONE)
 	rootvp = vrdp->mfs_viewroot_vp;
 	VN_HOLD(rootvp);
 	/* FIXME: needs nowait option! */
-	mfs_viewdircleanhm(rootvp);
-	VN_RELE(rootvp);
+	mfs_viewdircleanhm(rootvp, cd);
+	ATRIA_VN_RELE(rootvp, cd);
     }
 
     return;
@@ -1869,7 +1896,8 @@ mfs_periodic_maintenance(P_NONE)
 int
 mfs_vsync(VFS_T *vfsp,
 	  short flag,
-	  CRED_T *acred)	/* acred may be NULL from pre-SVR4 wrappers */
+	  CALL_DATA_T *cd
+)
 {
 
     mvfs_viewroot_data_t *vrdp = NULL;
@@ -1904,7 +1932,7 @@ mfs_vsync(VFS_T *vfsp,
 	     * this once if the viewroot is mounted (and once in the odd case
 	     * that the viewroot isn't mounted).
 	     */
-	    mfs_periodic_maintenance();
+	    mfs_periodic_maintenance(cd);
     }
 
     /* Log first, usually have to debug a hang here ... */
@@ -1918,7 +1946,7 @@ mfs_vsync(VFS_T *vfsp,
      * Sync any "dirty" mnodes (vob mnodes with cached pages) 
      */
     if (mfs_do_sync)
-	mvfs_mnsyncmnodes(vfsp);
+	mvfs_mnsyncmnodes(vfsp, cd);
 
     return(0);
 }
@@ -2004,14 +2032,18 @@ mfs_getmnode(
 
 #ifndef MVFS_WRAP_ENTER_EXIT
                     cred = MVFS_CD2CRED(cd);
-		    if (cred == NULL) {
-		        cred = MVFS_DUP_DEFAULT_CREDS();
-	    	        error = mfs_clnt_getattr_mnp(mnp, vfsp, cred);
-	                MDKI_CRFREE(cred);
-		        cred = NULL;
-		    } else {
-		        error = mfs_clnt_getattr_mnp(mnp, vfsp, cred);
-		    }
+                    if (cred == NULL) {
+                        cred = MVFS_DUP_DEFAULT_CREDS();
+                        if (cred == NULL) {
+                            error = ENOMEM;
+                        } else {
+                            error = mfs_clnt_getattr_mnp(mnp, vfsp, cred);
+                            MDKI_CRFREE(cred);
+                            cred = NULL;
+                        }
+                    } else {
+                        error = mfs_clnt_getattr_mnp(mnp, vfsp, cred);
+                    }
 #else
                     error = mfs_clnt_getattr_mnp(mnp, vfsp, cd);
 #endif
@@ -2035,7 +2067,7 @@ mfs_getmnode(
 			
 			mnp->mn_hdr.fid.mf_gen = MFS_NULL_GEN;
 			MUNLOCK(mnp);
-			mfs_mnrele(mnp);
+			mfs_mnrele(mnp, cd);
 			mnp = NULL;
 		    }
 		}	/* if (*nnp) ... */
@@ -2090,7 +2122,7 @@ mfs_getvnode(
      */
 
     if (!error) {
-        error = MVFS_VNGET(vfsp, NULL, mnp, &vp);
+        error = MVFS_VNGET(vfsp, NULL, mnp, &vp, cd);
     }
 
     *vpp = vp;
@@ -2205,7 +2237,7 @@ mvfs_vget_cd(
 
     error = mfs_getvnode(vfsp, vw, &fid, vpp, cd);
     if (vw != NULL) {
-        VN_RELE(vw);
+        ATRIA_VN_RELE(vw, cd);
     }
     /* 
      * I would like to fetch the cleartext here for non-atria
@@ -2423,4 +2455,4 @@ mvfs_find_mount(
     MVFS_UNLOCK(&(mvdp->mvfs_mountlock));
     return result;
 }
-static const char vnode_verid_mvfs_vfsops_c[] = "$Id:  b1d976dc.5b6211e2.8064.00:01:83:9c:f6:11 $";
+static const char vnode_verid_mvfs_vfsops_c[] = "$Id:  8fdc7d28.19d94263.b9e2.c2:72:1c:d1:47:81 $";

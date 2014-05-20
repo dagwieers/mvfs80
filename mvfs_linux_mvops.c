@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 1999, 2012 IBM Corporation.
+ * Copyright (C) 1999, 2013 IBM Corporation.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -1609,13 +1609,15 @@ mvop_linux_close_kernel(
         */
         MDKI_VFS_LOG(VFS_LOG_ERR,
                      "%s: Locks should be gone, continuing anyway. fp=%p vp=%p "
-                     "cnt=%d fcnt=%ld po=%p pid=%d tgid=%d fl=%p flo=%p\n",
+                     "cnt=%d fcnt=%ld po=%p pid=%d tgid=%d fl=%p flo=%p"
+                     "lock=%p\n",
                      __func__, fp, vp, count, (long)F_COUNT(fp),
                      current->files, current->pid, current->tgid,
                      fp->f_dentry->d_inode->i_flock->fl_file,
-                     fp->f_dentry->d_inode->i_flock->fl_owner);
-        /* Prevent the panic, although this will leak memory. */
-        fp->f_dentry->d_inode->i_flock = NULL;
+                     fp->f_dentry->d_inode->i_flock->fl_owner,
+                     fp->f_dentry->d_inode->i_flock);
+        /* We must have raced with someone.  Remove the lock now. */
+        locks_remove_posix(fp, fp->f_dentry->d_inode->i_flock->fl_owner);
     }
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,18)
     /* Do the filp_close() on the cleartext.  This will also do the
@@ -3160,4 +3162,4 @@ VFS_T vnlayer_cltxt_vfs = {
     .vfs_op =     &vnlayer_linux_cltxt_vfsop
     /* initialize vfs_sb at runtime */
 };
-static const char vnode_verid_mvfs_linux_mvops_c[] = "$Id:  97f0154b.4b8111e2.85f7.44:37:e6:71:2b:ed $";
+static const char vnode_verid_mvfs_linux_mvops_c[] = "$Id:  bfd982a4.009911e3.8267.00:01:84:c3:8a:52 $";

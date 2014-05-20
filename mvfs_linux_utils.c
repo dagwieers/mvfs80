@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 1999, 2012 IBM Corporation.
+ * Copyright (C) 1999, 2013 IBM Corporation.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -165,13 +165,38 @@ vnlayer_shadow_inode(
     SHADOW_CP_INODAT(real_inode, shadow_inode);
 }
 
-#ifndef MIN
-#define MIN(a,b) ((a) < (b) ? (a) : (b))
-#endif
+/* A utility routine to compare the group array in a CRED_T to an array
+ * in a group_info structure.
+ */
+inline int vnlayer_cmp_cred2grp(
+    CRED_T *cr,
+    struct group_info *grp
+)
+{
+    int i;
 
-#if MDKI_NGROUPS < LINUX_NGROUPS
-#error not enough room in creds structure for Linux groups
-#endif
+    if ((cr->cr_ngroups == 0) || (cr->cr_ngroups != grp->ngroups))
+        return 1;    
+    for (i = 0; i < cr->cr_ngroups; i++) {
+        if (cr->cr_groups[i] != GROUP_AT(grp, i))
+            return 1;
+    }
+    return 0;
+}
+/*
+ * I am puzzled by this code.  I do not know if it ever switches fsuids.
+ * The reason is that MDKI_CR_GET_UID/GID actually gets the fsuid/fsgid.
+ * So all we are checking is whether the fsuid/fsgid or group list has 
+ * changed since we entered the mvfs when we created our cred structure.
+ * A quick look at the Linux code does not show an obvious time that could
+ * the fsuid/fsgid would be changed out from under us.  Likewise, the
+ * group array can only be changed by system call (I think.) and that 
+ * system call changes the cred structure as well as the group structure
+ * so it should have no effect on currently running processes.
+ * Perhaps the bug is that the we should be comparing the actual real uid/gid
+ * to the fsuid/fsgid.  Alternatively my analysis above is flawed.  Or this
+ * really is a moderately expensive noop.
+ */
 
 mdki_boolean_t
 vnlayer_fsuid_save(
@@ -179,20 +204,26 @@ vnlayer_fsuid_save(
     CRED_T *cred
 )
 {
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,32)
     mdki_boolean_t rv = FALSE;  /* Assume failure. */
-    int my_ngroups;
+    int my_ngroups, i;
     gid_t *my_groups;
     struct group_info *my_group_info;
-
-    /* On 2.6 we need to lock the task structure, do a get on the info
-    ** we need, then unlock, and copy it to the local vars.  At the end
-    ** we'll do the put to undo the get.
+    struct group_info *gi_from_cred_p = NULL;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,32)
+    vnlayer_fsuid_save_struct_t *save = NULL;
+#else
+    SYS_CRED_T *tmp_cred;
+    const SYS_CRED_T *const_cred;
+#endif
+    /* No need to get a lock on current.  Make a private copy of our
+    ** group structure.  
     */
-    task_lock(current);
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,32)
     my_group_info = current->group_info;
     get_group_info(my_group_info);
-    task_unlock(current);
+#else
+    my_group_info = get_current_groups();
+#endif
 
     my_ngroups = my_group_info->ngroups;
 
@@ -212,26 +243,19 @@ vnlayer_fsuid_save(
 
     if (MDKI_CR_GET_UID(cred) != MDKI_GET_CURRENT_FSUID() ||
         MDKI_CR_GET_GID(cred) != MDKI_GET_CURRENT_FSGID() ||
-        cred->cr_ngroups != my_ngroups ||
-        (my_ngroups > 0 &&
-         BCMP(cred->cr_groups, my_groups, 
-              (cred->cr_ngroups * sizeof(cred->cr_groups[0]))) != 0))
+        vnlayer_cmp_cred2grp(cred, my_group_info))
     {
-        vnlayer_fsuid_save_struct_t *save = NULL;
 
+        /* Construct our own struct group_info from the creds we got. */
+        if ((gi_from_cred_p = groups_alloc(cred->cr_ngroups)) == NULL) {
+            goto done;
+        }
+        for (i = 0; i < cred->cr_ngroups; i++) {
+            GROUP_AT(gi_from_cred_p, i) = cred->cr_groups[i];
+        }
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,32)
         save = KMEM_ALLOC(sizeof(*save), KM_SLEEP);
         if (save != NULL) {
-            struct group_info *gi_from_cred_p;
-
-            /* Construct our own struct group_info from the creds we got. */
-            ASSERT(cred->cr_ngroups <= LINUX_NGROUPS);
-            if ((gi_from_cred_p = groups_alloc(cred->cr_ngroups)) == NULL) {
-                goto done;
-            }
-            /* GID's are unsigned int (32 bits) for everybody, so bcopy is OK. */
-            BCOPY(cred->cr_groups, gi_from_cred_p->blocks[0],
-                  cred->cr_ngroups * sizeof(cred->cr_groups[0]));
-
             /* Make our creds the current ones.  Save the current group info
             ** and get it because set_current_groups will put it, and we're
             ** saving a pointer to it.  Also, it will do a get on our
@@ -242,67 +266,44 @@ vnlayer_fsuid_save(
             get_group_info(save->saved_group_info);
             if (set_current_groups(gi_from_cred_p) != 0) {
                 put_group_info(save->saved_group_info);
-                put_group_info(gi_from_cred_p);
+                KMEM_FREE(save, sizeof(*save));
                 goto done;
-            } else {
-                put_group_info(gi_from_cred_p);
             }
             save->old_fsuid = MDKI_GET_CURRENT_FSUID();
             save->old_fsgid = MDKI_GET_CURRENT_FSGID();
             current->fsuid = MDKI_CR_GET_UID(cred);
             current->fsgid = MDKI_CR_GET_GID(cred);
-
             *save_p = save;
             rv = TRUE;
         }
-    }
-  done:                         /* Branching here assumes failure. */
-    put_group_info(my_group_info);
-    return(rv);
 #else
-    struct cred *tmp_cred;
-    vnlayer_fsuid_save_t save = NULL;
-    struct group_info *gi_p;
-    struct group_info *new_gi_p;
-
-    gi_p = get_current_groups();
-
-    if (MDKI_CR_GET_UID(cred) != MDKI_GET_CURRENT_FSUID() ||
-        MDKI_CR_GET_GID(cred) != MDKI_GET_CURRENT_FSGID() ||
-        cred->cr_ngroups != gi_p->ngroups ||
-        (gi_p->ngroups > 0 &&
-         BCMP(cred->cr_groups, gi_p->blocks[0],
-              (cred->cr_ngroups * sizeof(cred->cr_groups[0]))) != 0))
-    {
-        save = KMEM_ALLOC(sizeof(*save), KM_SLEEP);
-        if (save == NULL) {
-            goto error;
-        }
+        /* Now we have to modify and swap out the entire system cred
+         * structure.
+         */
         tmp_cred = prepare_creds();
-        if (tmp_cred == NULL) {
-           goto error;
-        }
-        put_group_info(tmp_cred->group_info);
-        new_gi_p = groups_alloc(cred->cr_ngroups);
-        if (new_gi_p == NULL) {
+        if (tmp_cred == NULL)
+            goto done;
+        if (set_groups(tmp_cred, gi_from_cred_p) !=0) {
             abort_creds(tmp_cred);
-            goto error;
+            goto done;
         }
-        /* GID's are unsigned int (32 bits) for everybody, so bcopy is OK. */
-        BCOPY(cred->cr_groups, new_gi_p->blocks[0],
-                cred->cr_ngroups * sizeof(cred->cr_groups[0]));
-        set_groups(tmp_cred, new_gi_p);
         tmp_cred->fsuid = MDKI_CR_GET_UID(cred);
         tmp_cred->fsgid = MDKI_CR_GET_GID(cred);
-        save->saved_cred = override_creds(tmp_cred);
-        *save_p = save;
-        return TRUE;
-    }
-error:
-    if (save != NULL)
-        KMEM_FREE(save, sizeof(*save));
-    return FALSE;
+        const_cred = tmp_cred;
+        *save_p = override_creds(const_cred);
+        /* Decrement count on cred so that it will be freed by the restore */
+        put_cred(tmp_cred);
+        rv = TRUE;
 #endif
+    }
+  done:                         /* Branching here assumes failure. */
+    /* If we allocated a new group pointer, decrement the count from the 
+     * allocate here.
+     */
+    if (gi_from_cred_p != NULL)
+        put_group_info(gi_from_cred_p);
+    put_group_info(my_group_info);
+    return(rv);
 }
 
 void
@@ -310,8 +311,8 @@ vnlayer_fsuid_restore(
     vnlayer_fsuid_save_t *saved_p
 )
 {
-    vnlayer_fsuid_save_struct_t *saved = *saved_p;
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,32)
+    vnlayer_fsuid_save_struct_t *saved = *saved_p;
     int err;
 
     *saved_p = NULL;
@@ -331,10 +332,11 @@ vnlayer_fsuid_restore(
      * the pointer to it so we had better free the memory too.
      */
     put_group_info(saved->saved_group_info);
-#else
-    revert_creds(saved->saved_cred);
-#endif
     KMEM_FREE(saved, sizeof(*saved));
+#else
+    const struct cred *cred = *saved_p;
+    revert_creds(cred);
+#endif
 }
 
 /*
@@ -1284,4 +1286,4 @@ mdki_vsnprintf(
 {
     return vsnprintf(str, limit, fmt, ap);
 }
-static const char vnode_verid_mvfs_linux_utils_c[] = "$Id:  1499f497.0c1f11e2.93ec.00:01:83:9c:f6:11 $";
+static const char vnode_verid_mvfs_linux_utils_c[] = "$Id:  c05982ec.009911e3.8267.00:01:84:c3:8a:52 $";

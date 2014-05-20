@@ -1,4 +1,4 @@
-/* * (C) Copyright IBM Corporation 1990, 2012. */
+/* * (C) Copyright IBM Corporation 1990, 2013. */
 /*
  This program is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License as published by
@@ -47,7 +47,7 @@ mvfs_translate_path(
 STATIC void
 mfs_clear_closevp(
     VNODE_T *vp,
-    CRED_T *cred
+    CALL_DATA_T *cd
 );
 
 #ifdef MVFS_DEBUG
@@ -419,7 +419,7 @@ VNODE_T *vp;
 void
 mfs_clear_rele(
     VNODE_T *vp,
-    CRED_T *cred
+    CALL_DATA_T *cd
 )
 {
     register struct mfs_mnode *mnp;
@@ -449,7 +449,7 @@ mfs_clear_rele(
 	     * let closes it.
 	     */
 	    if (mnp->mn_hdr.realvp)
-	        mfs_clear_closevp(vp,cred);
+	        mfs_clear_closevp(vp,cd);
 	}
     }
     MDB_XLOG((MDB_CLEAROPS,"rele: mnp=%"KS_FMT_PTR_T", cvp=%"KS_FMT_PTR_T", purge=%d\n",
@@ -464,7 +464,7 @@ mfs_clear_rele(
         /* 
          * Drop the cleartext vnode.
          */
-        mvfs_new_cltxt(vp, NULL);
+        mvfs_new_cltxt(vp, NULL, cd);
     }
 
     /* 06/07/93 - name is cached if no error on vnode */
@@ -510,7 +510,7 @@ int
 mvfs_clearattr(
     VNODE_T *vp,
     VATTR_T *vap, /* look only at mask to determine behavior */
-    CRED_T *cred
+    CALL_DATA_T *cd
 )
 {
     int error = 0;
@@ -550,7 +550,7 @@ mvfs_clearattr(
             if (mask == AT_SIZE) {
                 VATTR_NULL(&va);
                 VATTR_SET_MASK(&va, mask);
-                error = MVOP_GETATTR(MVFS_CVP_TO_VP(cvp), cvp, &va, 0, cred);
+                error = MVOP_GETATTR(MVFS_CVP_TO_VP(cvp), cvp, &va, 0, cd);
                 if (!error)
                     VATTR_SET_SIZE(&mnp->mn_vob.cleartext.va,
                                    VATTR_GET_SIZE(&va));
@@ -564,7 +564,7 @@ mvfs_clearattr(
                  */
                 VATTR_SET_MASK(&mnp->mn_vob.cleartext.va, AT_ALL);
                 error = MVOP_GETATTR(MVFS_CVP_TO_VP(cvp), cvp, 
-                                     &mnp->mn_vob.cleartext.va, 0, cred);
+                                     &mnp->mn_vob.cleartext.va, 0, cd);
             }
         } else {
             /*
@@ -575,9 +575,10 @@ mvfs_clearattr(
              */
             VATTR_SET_MASK(&mnp->mn_vob.cleartext.va, AT_ALL);
             error = MVOP_GETATTR(MVFS_CVP_TO_VP(cvp), cvp,
-                                 &mnp->mn_vob.cleartext.va, 0, cred);
+                                 &mnp->mn_vob.cleartext.va, 0, cd);
         }
 	if (!error) {
+
 	    /* Sync with wrapper (if required) */
 	    MVFS_WRAP_SYNC_SIZE(vp,
                                 VATTR_GET_SIZE(&mnp->mn_vob.cleartext.va),
@@ -666,7 +667,7 @@ mfs_clearowner(
      */
     VATTR_SET_MASK(&mnp->mn_vob.cleartext.va, AT_ALL);
     error = MVOP_GETATTR(MFS_REALVP(vp), MFS_CLRVP(vp), 
-                         &mnp->mn_vob.cleartext.va, 0, MVFS_CD2CRED(cd));
+                         &mnp->mn_vob.cleartext.va, 0, cd);
     if (!error) {
         xvap = MVFS_VATTR_ALLOC();
 
@@ -730,7 +731,8 @@ mfs_getcleartext_nm(
 EXTERN void
 mvfs_new_cltxt(
     VNODE_T *vp,
-    CLR_VNODE_T *new_cvp
+    CLR_VNODE_T *new_cvp,
+    CALL_DATA_T *cd
 )
 {
     register struct mfs_mnode *mnp = VTOM(vp);
@@ -752,12 +754,12 @@ mvfs_new_cltxt(
 	   "new cltxt: unexpected NFSv4 master vnode in cleartext cache. master="
             KS_FMT_PTR_T", realvp="KS_FMT_PTR_T"\n", 
 	    mnp->mn_hdr.realvp_master, mnp->mn_hdr.realvp);
-        CVN_RELE(mnp->mn_hdr.realvp_master);
+        CVN_RELE(mnp->mn_hdr.realvp_master, cd);
 	mnp->mn_hdr.realvp_master = NULL;
     }
 #endif
 
-    CVN_RELE(mnp->mn_hdr.realvp);       /* drop reference to old cltxt vnode */
+    CVN_RELE(mnp->mn_hdr.realvp, cd);       /* drop reference to old cltxt vnode */
     mnp->mn_hdr.realvp = new_cvp;
     if (mnp->mn_hdr.realvp != NULL) {
         /* new_cvp is often NULL, but if it's not we better hold what we're
@@ -917,7 +919,7 @@ mfs_getcleartext(
 	    error = MVOP_GETATTR(MVFS_CVP_TO_VP(mnp->mn_hdr.realvp),
                                  mnp->mn_hdr.realvp, 
 			         &mnp->mn_vob.cleartext.va, 0, 
-                                 MVFS_CD2CRED(cd));
+                                 cd);
 	    if (!error) {
 		if (mnp->mn_vob.cleartext.used == 0) {
 		    BUMPSTAT(mfs_clearstat.clearreclaim);
@@ -933,7 +935,7 @@ mfs_getcleartext(
 	     */
 
 	    if (mnp->mn_vob.open_count == 0) {
-                mvfs_new_cltxt(vp, NULL); /* drop old cltxt */
+                mvfs_new_cltxt(vp, NULL, cd); /* drop old cltxt */
 	    } else {
 		/* Can't rebind, but mark for purging on inactive */
 		mfs_clear_mark_purge(vp);
@@ -976,7 +978,7 @@ mfs_getcleartext(
 	/* Keep time stats over lookup ops only */
         MDKI_HRTIME(&stime);
 	error = LOOKUP_STORAGE_FILE(MFS_CLRTEXT_RO(mnp),
-			mnp->mn_vob.cleartext.nm, NULL, &cvp, MVFS_CD2CRED(cd));
+			mnp->mn_vob.cleartext.nm, NULL, &cvp, cd);
 	MVFS_BUMPTIME(stime, dtime, mfs_clearstat.clearget_time);
         if (mnp->mn_hdr.realvp != NULL) {
             /* we were looking up to check this caller's permissions */
@@ -996,14 +998,14 @@ mfs_getcleartext(
                               mnp, mnp->mn_hdr.realvp, cvp));
                     if (mnp->mn_vob.open_count == 0) {
                         /* drop old ctxt & creds, take extra hold on the new */
-                        mvfs_new_cltxt(vp, cvp);
+                        mvfs_new_cltxt(vp, cvp, cd);
                         mnp->mn_vob.cleartext.rwerr = 0;
                         mnp->mn_vob.cleartext.purge_nm = 0;   
                         mnp->mn_vob.cleartext.purge_cvp = 0; 
                         mnp->mn_vob.cleartext.ostale_logged = 0; 
                         mnp->mn_vob.cleartext.atime_pushed = 0;
                         /* Make sure we have valid stats */
-                        error = mvfs_clearattr(vp, NULL, MVFS_CD2CRED(cd));
+                        error = mvfs_clearattr(vp, NULL, cd);
                         MDB_XLOG((MDB_CLEAROPS, "idle ctxt rebind %s\n", mnp->mn_vob.cleartext.nm));
                     } else {
                         mfs_clear_mark_purge(vp);
@@ -1015,9 +1017,9 @@ mfs_getcleartext(
                     if (mnp->mn_vob.cleartext.used == 0) {
                         BUMPSTAT(mfs_clearstat.clearreclaim);
                     }
-                    error = mvfs_clearattr(vp, NULL, MVFS_CD2CRED(cd));
+                    error = mvfs_clearattr(vp, NULL, cd);
                 }
-                CVN_RELE(cvp); /* release the hold from the lookup */
+                CVN_RELE(cvp, cd); /* release the hold from the lookup */
                 goto out;
             }
             /* Error on lookup.  If mnode isn't open, flush its
@@ -1031,7 +1033,7 @@ mfs_getcleartext(
                 /* Dump (probable) bogus cleartext pathname we have, along
                    with creds used with it... */
                 PN_STRFREE(mnp->mn_vob.cleartext.nm);
-                mvfs_new_cltxt(vp, NULL); /* drop old cltxt & creds */
+                mvfs_new_cltxt(vp, NULL, cd); /* drop old cltxt & creds */
                 /* ...and continue with relookup below */
             } else switch (error) {
               case ENOENT:
@@ -1064,7 +1066,7 @@ mfs_getcleartext(
 	    mnp->mn_vob.cleartext.ostale_logged = 0; /* log again if needed */
 	    mnp->mn_vob.cleartext.atime_pushed = 0;   
 	    /* Make sure we have valid stats */
-	    error = mvfs_clearattr(vp, NULL, MVFS_CD2CRED(cd));
+	    error = mvfs_clearattr(vp, NULL, cd);
 	    goto out;
 	} else {
 	    /* Dump bogus cleartext pathname we have.  (No creds around since
@@ -1105,7 +1107,7 @@ mfs_getcleartext(
 	for (clookup_retries=0; clookup_retries < 3; clookup_retries++) {
 	    error = LOOKUP_STORAGE_FILE(MFS_CLRTEXT_RO(mnp),
 					mnp->mn_vob.cleartext.nm, 
-					NULL, &cvp, MVFS_CD2CRED(cd));
+					NULL, &cvp, cd);
 	    if (!error) {
                 MVFS_CTXT_VN_DUP(vp, cvp);
 	        mnp->mn_hdr.realvp = cvp;
@@ -1135,7 +1137,7 @@ mfs_getcleartext(
                  * if we got ENOENT, try poking the NFS cache to find
                  * the entry which is supposed to be there.
                  */
-                if (MVFS_PROD_PARENT_DIR_CACHE(mnp, MVFS_CD2CRED(cd)) != 0) {
+                if (MVFS_PROD_PARENT_DIR_CACHE(mnp, cd) != 0) {
                     MDKI_USECDELAY(400000);	/* Sleep for .4 sec */
                 }
 	    }
@@ -1149,7 +1151,7 @@ mfs_getcleartext(
 	     * Never return error with a bad pname still cached in the mnode.
              */
 	    mfs_clear_mark_name_purge(vp);
-	    mfs_clear_rele(vp, MVFS_CD2CRED(cd));
+	    mfs_clear_rele(vp, cd);
 
 	    /* 
 	     * FIXME: want some code here to correct automatically
@@ -1194,7 +1196,7 @@ mfs_getcleartext(
 
     if (!error) {
 	ASSERT(mnp->mn_hdr.realvp);
-	error = mvfs_clearattr(vp, NULL, MVFS_CD2CRED(cd));
+	error = mvfs_clearattr(vp, NULL, cd);
     }
 
 out:
@@ -1238,8 +1240,9 @@ out:
    of the passed in (ansi) pathname. */
 
 mfs_pn_char_t *
-mfs_getleaf_ansi(pname)
-mfs_pn_char_t *pname;
+mfs_getleaf_ansi(
+    mfs_pn_char_t *pname
+)
 {
     mfs_pn_char_t *s = pname;
     mfs_pn_char_t *leafp = pname;
@@ -1319,7 +1322,7 @@ mfs_clear_create(
         MDKI_HRTIME(&stime);
 
    	error = MVFS_CREATEVP(mnp->mn_vob.cleartext.nm, vap, &cvp,
-                              MVFS_CD2CRED(cd), flag);
+                              cd, flag);
 
 	/* Handle errors in cleartext creations */
         if (error) {
@@ -1331,7 +1334,7 @@ mfs_clear_create(
 	     * bad cleartext name to be cached.
 	     */
 	    mfs_clear_mark_name_purge(vp);
-	    mfs_clear_rele(vp, MVFS_CD2CRED(cd));
+	    mfs_clear_rele(vp, cd);
 	} else {
 	    if (mnp->mn_hdr.realvp == NULL) {
                 MVFS_CTXT_VN_DUP(vp, cvp);
@@ -1346,11 +1349,11 @@ mfs_clear_create(
   		mnp->mn_vob.cleartext.atime_pushed = 0;
                 MVFS_RECORD_CREDLIST(mnp, TRUE, MVFS_CD2CRED(cd));
 	    } else {
-		CVN_RELE(cvp);
+		CVN_RELE(cvp, cd);
                 cvp = NULL;
 		BUMPSTAT(mfs_clearstat.clearcreatraces);
 	    }
-	    error = mvfs_clearattr(vp, NULL, MVFS_CD2CRED(cd)); /* Get clear attrs */
+	    error = mvfs_clearattr(vp, NULL, cd); /* Get clear attrs */
 	    MVFS_BUMPTIME(stime, dtime, mfs_clearstat.clearcreat_time);
 
             /* Successful create (cvp is stored in realvp), return held vnode
@@ -1383,11 +1386,12 @@ errout:
  */
 
 int
-mfs_copyvp(ovp, nvp, len, cred)
-CLR_VNODE_T *ovp;
-CLR_VNODE_T *nvp;
-VATTR_SIZE_T len;
-CRED_T *cred;
+mfs_copyvp(
+    CLR_VNODE_T *ovp,
+    CLR_VNODE_T *nvp,
+    VATTR_SIZE_T len,
+    CALL_DATA_T *cd
+)
 {
     int error;
     char *copybuf = NULL;
@@ -1426,12 +1430,12 @@ CRED_T *cred;
     CVN_HOLD(ovp);
 #endif
 
-    error = MVOP_OPEN_KERNEL(&ovp, FREAD, cred, &rdfp);
+    error = MVOP_OPEN_KERNEL(&ovp, FREAD, cd, &rdfp);
     mvfs_logperr(MFS_LOG_ERR, error, "Copy-on-Write src open");
     if (error) goto errout;
     ovp_open = 1;
 
-    error = MVOP_OPEN_KERNEL(&nvp, FWRITE|FTRUNC, cred, &wrfp);
+    error = MVOP_OPEN_KERNEL(&nvp, FWRITE|FTRUNC, cd, &wrfp);
     mvfs_logperr(MFS_LOG_ERR, error, "Copy-on-Write dest open");
     if (error) goto errout;
     nvp_open = 1;
@@ -1441,7 +1445,7 @@ CRED_T *cred;
 	mfs_uioset(uiop, copybuf, mvfs_cowbufsiz, off, UIO_SYSSPACE);
 
 	MVOP_RWRDLOCK(ovp, NULL);
-	error = MVOP_READ_KERNEL(ovp, uiop, 0, NULL, cred, rdfp);
+	error = MVOP_READ_KERNEL(ovp, uiop, 0, NULL, cd, rdfp);
 	MVOP_RWRDUNLOCK(ovp, NULL);
 
         mvfs_logperr(MFS_LOG_ERR, error, "Copy-on-Write src read");
@@ -1452,7 +1456,7 @@ CRED_T *cred;
 	mfs_uioset(uiop, copybuf, nb, off, UIO_SYSSPACE);
 
 	MVOP_RWWRLOCK(nvp, NULL);
-	error = MVOP_WRITE_KERNEL(nvp, uiop, 0, NULL, cred, wrfp);
+	error = MVOP_WRITE_KERNEL(nvp, uiop, 0, NULL, cd, wrfp);
 	MVOP_RWWRUNLOCK(nvp, NULL);
 
         mvfs_logperr(MFS_LOG_ERR, error, "Copy-on-Write dest write");
@@ -1463,9 +1467,10 @@ CRED_T *cred;
 
 errout:
     if (ovp_open) (void) MVOP_CLOSE_KERNEL(ovp, FREAD, MVFS_LASTCLOSE_COUNT,
-				    (MOFFSET_T)0, cred, rdfp);
-    if (nvp_open) (void) MVOP_CLOSE_KERNEL(nvp, FWRITE|FTRUNC, MVFS_LASTCLOSE_COUNT,
-				    (MOFFSET_T)0, cred, wrfp);
+				    (MOFFSET_T)0, cd, rdfp);
+    if (nvp_open) (void) MVOP_CLOSE_KERNEL(nvp, FWRITE|FTRUNC,
+                                    MVFS_LASTCLOSE_COUNT,
+                                    (MOFFSET_T)0, cd, wrfp);
 
 #ifdef NFSV4_SHADOW_VNODE
     /* NFSv4 Compliance: RATLC01011478: As explained above if NFSv4 replaces
@@ -1475,7 +1480,7 @@ errout:
      * the cases where the vnode was not replaced, this CVN_RELE takes care
      * of the extra reference above.
      */ 
-    CVN_RELE(ovp);
+    CVN_RELE(ovp, cd);
 #endif    
 
     if (copybuf)
@@ -1488,7 +1493,7 @@ errout:
 STATIC void
 mfs_clear_closevp(
     VNODE_T *vp,
-    CRED_T *cred
+    CALL_DATA_T *cd
 )
 {
 	register struct mfs_mnode *mnp;
@@ -1509,10 +1514,10 @@ mfs_clear_closevp(
 
 
 	while ( wcount--  > 0 ) {
-		MVOP_CLOSE(cvp, FREAD|FWRITE, MVFS_LASTCLOSE_COUNT, 0, cred, NULL);
+		MVOP_CLOSE(cvp, FREAD|FWRITE, MVFS_LASTCLOSE_COUNT, 0, cd, NULL);
 	}
 	while ( count--  > 0 ) {
-		MVOP_CLOSE(cvp, FREAD, MVFS_LASTCLOSE_COUNT, 0, cred, NULL );
+		MVOP_CLOSE(cvp, FREAD, MVFS_LASTCLOSE_COUNT, 0, cd, NULL);
 	}
     return;
 }
@@ -1728,4 +1733,4 @@ mvfs_flush_credlists(
         mvfs_clear_release_credlist(clist);
     }
 }
-static const char vnode_verid_mvfs_clearops_c[] = "$Id:  93affc0e.196a11e2.9cb5.00:01:84:c3:8a:52 $";
+static const char vnode_verid_mvfs_clearops_c[] = "$Id:  bc3ca9f5.3ef64a94.8bcd.02:bd:66:33:57:1d $";

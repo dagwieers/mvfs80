@@ -38,41 +38,44 @@ STATIC MVFS_NOINLINE mfs_auditfile_t *
 mfs_afpnew(
     char *pname,
     char *upname,
-    CLR_VNODE_T *cvp
+    CLR_VNODE_T *cvp,
+    CALL_DATA_T *cd
 );
 STATIC void MVFS_NOINLINE
 mfs_afpdestroy(
-    mfs_auditfile_t *afp
+    mfs_auditfile_t *afp,
+    mvfs_thread_t *mth
 );
 STATIC MVFS_NOINLINE struct mfs_auditfile *
 mfs_afpget(
     char *pname,
     char *upname,
-    CLR_VNODE_T *cvp
+    CLR_VNODE_T *cvp,
+    CALL_DATA_T *cd
 );
-STATIC void mfs_afp_obsolete(P1(mvfs_thread_t *mth));
-STATIC int mfs_cmpdirrec(P1(mfs_auditrec_t *rp)
-			 PN(u_int kind)
-			 PN(VNODE_T *dvp)
-			 PN(char *nm)
-			 PN(size_t nmlen)
-			 PN(VNODE_T *vp)
-			 PN(VATTR_T *vap));
-STATIC int mfs_cmprwrec(P1(mfs_auditrec_t *rp)
-			PN(u_int kind)
-			PN(VNODE_T *vp)
-			PN(VATTR_T *vap));
-STATIC int mfs_cmpviewrec(P1(mfs_auditrec_t *rp)
-			  PN(VNODE_T *vp));
-STATIC int mfs_isdupl(P1(mfs_auditfile_t *afp)
-		      PN(u_int kind)
-		      PN(VNODE_T *dvp)
-		      PN(char *nm)
-		      PN(size_t nmlen)
-		      PN(VNODE_T *vp)
-		      PN(VATTR_T *vap));
-STATIC void mvfs_auditwrite_int(P1(mfs_auditfile_t *afp)
-			       PN(mvfs_thread_t *mth));
+STATIC void mfs_afp_obsolete(mvfs_thread_t *mth);
+STATIC int mfs_cmpdirrec(mfs_auditrec_t *rp,
+                         u_int kind,
+                         VNODE_T *dvp,
+                         char *nm,
+                         size_t nmlen,
+                         VNODE_T *vp,
+                         VATTR_T *vap);
+STATIC int mfs_cmprwrec(mfs_auditrec_t *rp,
+                        u_int kind,
+                        VNODE_T *vp,
+                        VATTR_T *vap);
+STATIC int mfs_cmpviewrec(mfs_auditrec_t *rp,
+                          VNODE_T *vp);
+STATIC int mfs_isdupl(mfs_auditfile_t *afp,
+                      u_int kind,
+                      VNODE_T *dvp,
+                      char *nm,
+                      size_t nmlen,
+                      VNODE_T *vp,
+                      VATTR_T *vap);
+STATIC void mvfs_auditwrite_int(mfs_auditfile_t *afp,
+                                mvfs_thread_t *mth);
 
 /*
  * Initialize the structures for managing the audit subsystem
@@ -121,7 +124,8 @@ STATIC MVFS_NOINLINE mfs_auditfile_t *
 mfs_afpnew(
     char *pname,
     char *upname,
-    CLR_VNODE_T *cvp
+    CLR_VNODE_T *cvp,
+    CALL_DATA_T *cd
 )
 {
     mvfs_audit_data_t *madp = MDKI_AUDIT_GET_DATAP();
@@ -146,6 +150,8 @@ mfs_afpnew(
            which has greater rights. */
 
         afp->cred = MVFS_DUP_DEFAULT_CREDS();
+        if (afp->cred == NULL)
+            goto errout;
         afp->cvp = cvp;
         CVN_HOLD(cvp);	/* Hold for this reference */
         INITLOCK(&afp->lock, "afplock ");
@@ -167,7 +173,7 @@ errout:
         if (afp->buf) KMEM_FREE(afp->buf, afp->buflen);
         if (afp->path) STRFREE(afp->path);
         if (afp->upath) STRFREE(afp->upath);
-        if (afp->cvp) CVN_RELE(afp->cvp);
+        if (afp->cvp) CVN_RELE(afp->cvp, cd);
         KMEM_FREE(afp, sizeof(*afp));
     }
 
@@ -186,7 +192,8 @@ STATIC MVFS_NOINLINE struct mfs_auditfile *
 mfs_afpget(
     char *pname,
     char *upname,
-    CLR_VNODE_T *cvp
+    CLR_VNODE_T *cvp,
+    CALL_DATA_T *cd
 )
 {
     mvfs_audit_data_t *madp = MDKI_AUDIT_GET_DATAP();
@@ -231,7 +238,7 @@ mfs_afpget(
 
     /* No previous found, allocate a new struct */
 
-    afp = mfs_afpnew(pname, upname, cvp);
+    afp = mfs_afpnew(pname, upname, cvp, cd);
     MVFS_UNLOCK(&(madp->mfs_aflock));
     MDB_XLOG((MDB_AUDITF, "afpget: (new) afp=%"KS_FMT_PTR_T" refcnt=%d pid=%d\n",
                 afp, afp->refcnt, MDKI_CURPID()));
@@ -240,10 +247,14 @@ mfs_afpget(
 
 STATIC void MVFS_NOINLINE
 mfs_afpdestroy(
-    mfs_auditfile_t *afp
+    mfs_auditfile_t *afp,
+    mvfs_thread_t *mth
 )
 {
+    MVFS_DECLARE_TEMP_CD(temp_cd);
     mvfs_audit_data_t *madp = MDKI_AUDIT_GET_DATAP();
+    
+    MVFS_INIT_TEMP_CD(temp_cd_p, afp->cred, mth);
 
     ASSERT(afp->refcnt = 1);        /* No destroy if more refs */
 
@@ -254,7 +265,7 @@ mfs_afpdestroy(
     RM_LIST(afp);
     MVFS_UNLOCK(&(madp->mfs_aflock));
     FREELOCK(&afp->lock);
-    if (afp->cvp) CVN_RELE(afp->cvp);
+    if (afp->cvp) CVN_RELE(afp->cvp, temp_cd_p);
     if (afp->path) STRFREE(afp->path);
     if (afp->upath) STRFREE(afp->upath);
     if (afp->buf)  KMEM_FREE(afp->buf, afp->buflen);
@@ -288,9 +299,9 @@ mfs_auditfile_t *afp;
  * ourselves. 
  */
 void
-mvfs_afprele(afp, thr)
+mvfs_afprele(afp, mth)
 mfs_auditfile_t *afp;
-mvfs_thread_t *thr;
+mvfs_thread_t *mth;
 {
     mvfs_common_data_t *mcdp = MDKI_COMMON_GET_DATAP();
     mvfs_audit_data_t *madp = MDKI_AUDIT_GET_DATAP();
@@ -308,7 +319,7 @@ mvfs_thread_t *thr;
 
     MVFS_LOCK(&afp->lock);
     if (afp->refcnt == 1) {   /* Sync contents */
-        mvfs_auditwrite_int(afp, thr);
+        mvfs_auditwrite_int(afp, mth);
 
         /*
          * Need to unlock apf->lock to prevent a deadlock, mfs_afpdestroy
@@ -317,7 +328,8 @@ mvfs_thread_t *thr;
          */
         afp->destroy = 1;
         MVFS_UNLOCK(&afp->lock);
-        mfs_afpdestroy(afp);
+
+        mfs_afpdestroy(afp, mth);
     } else {
         afp->refcnt--;
         MVFS_UNLOCK(&afp->lock);
@@ -349,8 +361,12 @@ mvfs_afprele_proc(
     ** it finds a "matching" one, holds it and returns it.  That case is handled
     ** in mfs_afprele() above (in the afp_race: "loop").
     */
+
+    MVFS_LOCK(&proc->mp_lock);
     my_afp = proc->mp_afp;
     proc->mp_afp = NULL;
+    MVFS_UNLOCK(&proc->mp_lock);
+
     if (my_afp != NULL) {
         MVFS_UNLOCK(&(mcdp->proc_thr.mvfs_proclock));
         mvfs_afprele(my_afp, thr);
@@ -361,16 +377,14 @@ mvfs_afprele_proc(
 }
 
 void
-mvfs_afprele_thr(thr)
-mvfs_thread_t *thr;
+mvfs_afprele_thr(mvfs_thread_t *thr)
 {
     mvfs_afprele(thr->thr_afp, thr);
-    thr->thr_afp = NULL;	/* Kill ptr */
+    thr->thr_afp = NULL;    /* Kill ptr */
 }
 
 STATIC void
-mfs_afp_obsolete(mth)
-mvfs_thread_t *mth;
+mfs_afp_obsolete(mvfs_thread_t *mth)
 {
     register mfs_auditfile_t *afp;
 
@@ -378,6 +392,7 @@ mvfs_thread_t *mth;
     MVFS_LOCK(&afp->lock);
     afp->obsolete = 1;  /* Set obsolete flag */
     MVFS_UNLOCK(&afp->lock);
+
     return;
 }
 
@@ -422,7 +437,7 @@ mfs_auditioctl(
      * copy in data here, and convert for LP64 if necessary 
      */
 
-    mth = MVFS_MYTHREAD(cd);		/* Get my process state */
+    mth = MVFS_MYTHREAD(cd);              /* Get my process state */
 
     switch (MCB_CMD(kdata)) {
         case MVFS_CMD_GET_BH: {
@@ -486,10 +501,11 @@ mfs_auditioctl(
                 break;
             kdata->status = TBS_ST_OK;
 
-            if (mth->thr_afp && mth->thr_afp->upath)
+            if (mth->thr_afp != NULL && mth->thr_afp->upath)
                 error = mfs_copyout_strbufpn(afile, mth->thr_afp->upath);
             else
                 error = mfs_copyout_strbufpn(afile, NULL);
+
             if (error != 0)
                 break;
             error = CopyOutMfs_strbufpn(&afile, kdata->infop, callinfo);
@@ -536,7 +552,7 @@ mfs_auditioctl(
              */
 
             MFS_INHAUDIT(mth);
-            error = LOOKUP_AUDIT_FILE(path, &afvp, MVFS_CD2CRED(cd));
+            error = LOOKUP_AUDIT_FILE(path, &afvp, cd);
             if (!error) {
                 CLR_VNODE_T *rvp = NULL;
                 if (MVOP_REALCVP(afvp, &rvp) == 0 && afvp != rvp) {
@@ -544,7 +560,7 @@ mfs_auditioctl(
                      * got a realvp through the operation, use that instead.
                      */
                     CVN_HOLD(rvp);
-                    CVN_RELE(afvp);
+                    CVN_RELE(afvp, cd);
                     afvp = rvp;
                 }
                 if (MFS_VPISMFS(MVFS_CVP_TO_VP(afvp))) {
@@ -555,7 +571,7 @@ mfs_auditioctl(
                     error = MVOP_ACCESS(MVFS_CVP_TO_VP(afvp), VWRITE, 0,
                                         cd, NULL);
                 }
-                if (error) CVN_RELE(afvp);
+                if (error) CVN_RELE(afvp, cd);
             }
             MFS_ENBAUDIT(mth);
             if (error) {
@@ -571,11 +587,11 @@ mfs_auditioctl(
          
             /* File is suitable, release old file binding and
                try to attach new file. */
-        
+
             if (mth->thr_afp != NULL) {
                 mvfs_afprele_thr(mth);
             }
-            mth->thr_afp = mfs_afpget(path, upath, afvp);
+            mth->thr_afp = mfs_afpget(path, upath, afvp, cd);
             if (mth->thr_afp == NULL) error = ENOMEM;
 
             /*
@@ -591,7 +607,7 @@ mfs_auditioctl(
 
             mvfs_sync_procstate(mth);
 
-            CVN_RELE(afvp);	/* afpget held audit file vnode if needed */
+            CVN_RELE(afvp, cd);	/* afpget held audit file vnode if needed */
             MDB_XLOG((MDB_AUDITF, "setafile: path=%s afp=%"KS_FMT_PTR_T" err=%d pid=%d\n",
                 path, mth->thr_afp, error, MDKI_CURPID()));
             STRFREE(path);
@@ -630,13 +646,13 @@ mfs_auditioctl(
             auto u_long aflags;
 
             if ((error = CopyInMvfs_u_long(kdata->infop, &aflags, callinfo)) != 0)
-                    break;
+                break;
 
             MDB_XLOG((MDB_AUDITF, "startaudit: pid=%d\n", MDKI_CURPID()));
 
             tbsstatus = MVFS_ESTABLISH_FORK_HANDLER();
             if (tbsstatus != TBS_ST_OK) break;
-         
+
             /*
              * We need to insure no other thread has set the audit
              * state since we last synchronized, so we take the proc lock
@@ -668,7 +684,7 @@ mfs_auditioctl(
                 mth->thr_afp->af_transtype = 1;
 #endif
             mvfs_sync_procstate_locked(mth); /* XXX */
-            
+
             MVFS_UNLOCK(&(mth->thr_proc->mp_lock));
             MVFS_MDEP_PROC_START_AUDIT(); /* update NT's mdep proc shadow */
             break;
@@ -676,19 +692,21 @@ mfs_auditioctl(
         case MVFS_CMD_STOP_AUDIT: {	/* Stops audit and release resources */
             MVFS_MDEP_PROC_STOP_AUDIT(); /* update NT's mdep proc shadow */
             MDB_XLOG((MDB_AUDITF, "stopaudit: pid=%d\n", MDKI_CURPID()));
-            if (mth->thr_afp) {		/* Sync/release audit file if one */
+            if (mth->thr_afp != NULL) {		/* Sync/release audit file if one */
                 mvfs_auditwrite(mth);
                 error = mth->thr_afp->auditwerr;	/* Delayed write error */
                 mfs_afp_obsolete(mth);	/* Obsolete (shut off) the auditfile */
                 mvfs_afprele_thr(mth);	/* Release struct now */
             }
+
             mth->thr_auditon = 0;
             mvfs_sync_procstate(mth);	/* it will drop */
             break;
         }
         case MVFS_CMD_SYNC_AUDIT: {
             MDB_XLOG((MDB_AUDITF, "syncaudit: pid=%d\n", MDKI_CURPID()));
-            if (mth->thr_afp) {	/* Sync the audit file */
+
+            if (mth->thr_afp != NULL) {	/* Sync the audit file */
                 mvfs_auditwrite(mth);
                 error = mth->thr_afp->auditwerr;	/* Return any write error */
             } else error = ENOENT;	/* No audit file */
@@ -706,7 +724,7 @@ mfs_auditioctl(
             MDB_XLOG((MDB_AUDITF, "auditmarker: pid=%d flags=%lx\n",
                       MDKI_CURPID(), marker_flags));
 
-            if (mth->thr_afp) {
+            if (mth->thr_afp != NULL) {
                 /* write a marker */
                 MFS_AUDIT_EXT(MFS_AR_MARKER, NULL, NULL, NULL, NULL, NULL,
                               marker_flags, cd);
@@ -1130,12 +1148,12 @@ mfs_audit(
                 BUMPSTAT(mfs_austat.au_nvgetattr);
                 MFS_CHKSP(STK_GETATTR);	
                 MVFS_VP_TO_CVP(vp, &cvp); /* XXX non-mvfs: fail? */
-                if (MVOP_GETATTR(vp, cvp, &afp->va, 0, MVFS_CD2CRED(cd)) == 0) {
+                if (MVOP_GETATTR(vp, cvp, &afp->va, 0, cd) == 0) {
                     VATTR_GET_MTIME_TV(&afp->va, &mtime);
                 } else {
                     MVFS_FREE_VATTR_FIELDS(&afp->va);
                 }
-                CVN_RELE(cvp);
+                CVN_RELE(cvp, cd);
             }
             MFS_ENBREBIND(mth);
         }
@@ -1499,7 +1517,6 @@ no_audit:
     }
 #endif
     return(0);
-
 }
 
 void
@@ -1525,6 +1542,7 @@ register mvfs_thread_t *mth;
         struct uio uio;
         IOVEC_T iovec;
     } *uvp;
+    MVFS_DECLARE_TEMP_CD(temp_cd);
     CLR_VNODE_T *cvp = NULL;
     struct uio *uiop;
     struct mfs_auditrec_32 *tbufp = NULL;
@@ -1534,11 +1552,10 @@ register mvfs_thread_t *mth;
     timestruc_t dtime;
     void *afp_file;
     u_long bytes_to_write;
-
+    
     MDKI_HRTIME(&stime);
 
-    ASSERT(mth == mvfs_mythread());	/* we must inhibit ourselves */
-    ASSERT(&afp->lock);
+    /* ASSERT(&afp->lock); */ 
 
     /* If a delayed write error, just clear the bufptrs and return */
 
@@ -1597,15 +1614,16 @@ register mvfs_thread_t *mth;
         error = ESTALE;
         goto errout;
     }
+    MVFS_INIT_TEMP_CD(temp_cd_p, afp->cred, mth);
     CVN_HOLD(cvp);
-    error = MVOP_OPEN_KERNEL(&cvp, FWRITE, afp->cred, &afp_file);
+    error = MVOP_OPEN_KERNEL(&cvp, FWRITE, temp_cd_p, &afp_file);
     if (error) goto errout;
 
     /* Use getattr to get end of file for write */
 
     MFS_CHKSP(STK_GETATTR);
     VATTR_SET_MASK(&uvp->va, AT_SIZE);
-    error = MVOP_GETATTR(MVFS_CVP_TO_VP(cvp), cvp, &uvp->va, 0, afp->cred);
+    error = MVOP_GETATTR(MVFS_CVP_TO_VP(cvp), cvp, &uvp->va, 0, temp_cd_p);
     if (error) goto closeout;
 
     /* 
@@ -1624,7 +1642,7 @@ register mvfs_thread_t *mth;
     ** isn't one.
     */
     do {
-        error = MVOP_WRITE_KERNEL(cvp, uiop, 0, NULL, afp->cred, afp_file);
+        error = MVOP_WRITE_KERNEL(cvp, uiop, 0, NULL, temp_cd_p, afp_file);
         if (error == 0) {
             if (uiop->uio_resid == bytes_to_write) { /* No progress... */
                 MDB_XLOG((MDB_AUDITF,
@@ -1653,7 +1671,7 @@ register mvfs_thread_t *mth;
 closeout:
     xerror = MVOP_CLOSE_KERNEL(cvp, FWRITE, /* Close audit file */
                                MVFS_LASTCLOSE_COUNT | MVFS_KEEPHANDLE,
-                               (MOFFSET_T)0, afp->cred, afp_file);
+                               (MOFFSET_T)0, temp_cd_p, afp_file);
     if (!error) error = xerror;		/* Don't overwrite real error */
 
 errout:
@@ -1665,7 +1683,7 @@ errout:
 
     MVFS_FREE_VATTR_FIELDS(&uvp->va);
     KMEM_FREE(uvp, sizeof(*uvp));
-    if (cvp) CVN_RELE(cvp);
+    if (cvp) CVN_RELE(cvp, temp_cd_p);
     MFS_ENBAUDIT(mth);
     if (error) {
         afp->auditwerr = error;
@@ -1677,4 +1695,4 @@ out:
     MVFS_BUMPTIME(stime, dtime, mfs_austat.au_time);
     return;
 }
-static const char vnode_verid_mvfs_auditops_c[] = "$Id:  bfe27115.804f11e2.822a.00:01:84:c3:8a:52 $";
+static const char vnode_verid_mvfs_auditops_c[] = "$Id:  d95da76d.7f9f418c.9f98.f5:04:75:4a:83:68 $";

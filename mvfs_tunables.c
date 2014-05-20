@@ -1,4 +1,4 @@
-/* * (C) Copyright IBM Corporation 2001, 2012. */
+/* * (C) Copyright IBM Corporation 2001, 2013. */
 /*
  This program is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License as published by
@@ -54,6 +54,9 @@
  *                      for /view/<viewtag>.  Set to 1, both cases will return
  *                      a link count of 2 which was the system behaviour 
  *                      before ClearCase v3.2.1.
+ * mvfs_pview_stat_enabled: Tunable to enable or disable per-view statistics
+ *                      collection.  Per-view statistics collection is
+ *                      turned off by default.
  */
 
 int mvfs_dncenabled = 1;
@@ -65,6 +68,7 @@ int mvfs_rlenabled = 1;
 int mvfs_rdcenabled = 1;
 int mvfs_rebind_dir_enable = 1;
 int mvfs_vlinkcnt2 = 0;
+int mvfs_pview_stat_enabled = 0;
 
 /*
  * MNODE parameters
@@ -251,7 +255,8 @@ int mvfs_copy_tunable(mvfs_common_data_t *mcdp)
     mcdp->mvfs_rdcenabled = mvfs_rdcenabled;
     mcdp->mvfs_rebind_dir_enable = mvfs_rebind_dir_enable;
     mcdp->mvfs_vlinkcnt2 = mvfs_vlinkcnt2;
+    mcdp->mvfs_pview_stat_enabled = mvfs_pview_stat_enabled;
 
     return 0;
 }
-static const char vnode_verid_mvfs_tunables_c[] = "$Id:  9ebad464.f14111e1.9c93.00:01:84:c3:8a:52 $";
+static const char vnode_verid_mvfs_tunables_c[] = "$Id:  dae81e64.009611e3.8267.00:01:84:c3:8a:52 $";

@@ -358,6 +358,11 @@ struct {
        /* MVFS_CMD_MKVIEWTAG_EX 62 */
        {FALSE, 0, 0},
 
+       /* MVFS_CMD_ENABLE_PVIEW_STATS 63 */
+       {TRUE, 0, 0},
+
+       /* MVFS_CMD_DISABLE_PVIEW_STATS 64 */
+       {TRUE, 0, 0},
 };
 
 int
@@ -1078,6 +1083,7 @@ void
 mvfs_viewstats_32_to_mvfs_viewstats(struct mvfs_viewstats_32 *vbl_32, struct mvfs_viewstats *vbl)
 {
 	mfs_strbuf_32_to_mfs_strbuf(&vbl_32->viewtag, &vbl->viewtag);
+	mfs_strbuf_32_to_mfs_strbuf(&vbl_32->mvfs_pview_stat_enabled, &vbl->mvfs_pview_stat_enabled);
 	mvfs_statbufs_32_to_mvfs_statbufs(&vbl_32->stats, &vbl->stats);
 }
 void
@@ -1099,4 +1105,4 @@ mvfs_gfsinfo_32_to_mvfs_gfsinfo(struct mvfs_gfsinfo_32 *gfsinfo_32, struct mvfs_
 }
 
 #endif /* ATRIA_LP64 || ATRIA_LLP64 */
-static const char vnode_verid_mvfs_transtype_c[] = "$Id:  b49977fc.5b6211e2.8064.00:01:83:9c:f6:11 $";
+static const char vnode_verid_mvfs_transtype_c[] = "$Id:  d7e81cb4.009611e3.8267.00:01:84:c3:8a:52 $";

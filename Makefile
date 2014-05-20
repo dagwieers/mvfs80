@@ -160,7 +160,22 @@ MVFS_DEFS= \
 	-DXREV_CLIENTS_SUPPORT_V7_SERVERS \
 	-D_LARGEFILE64_SOURCE
 
-WARNING_FLAGS = -Wall -Wstrict-prototypes -Wunused -Werror 
+ifneq (,$(findstring s390,$(ARCH)))
+#SLES11 SP3 (3.0.79) kernel has kernel headers that generate a warning
+#but only on the S390.
+#This is fixed in the 3.0.82 kernel
+UPDATE_VER=$(shell echo $(RELEASE) |cut -d - -f 1 | cut -d . -f 1-3)
+ifeq (3.0,$(shell echo $(UPDATE_VER) | cut -d . -f 1-2))
+BUILD_NUM=$(shell echo $(UPDATE_VER) | cut -d . -f 3)
+ifeq (1,$(shell test $(BUILD_NUM) -ge 76 && test $(BUILD_NUM) -lt 82 && echo "1"))
+WARNING_FLAGS = -w
+endif #ifeq(1,$(shell...
+endif #ifeq(3.0...
+endif #ifneq (,$(findstring...
+ifeq ($(WARNING_FLAGS),)
+#Use defaults if we didn't set it above.
+WARNING_FLAGS = -Wall -Wstrict-prototypes -Wunused -Werror
+endif
 
 all: mvfs_param.mk.config
 	$(MAKE) -C $(LINUX_KERNEL_DIR) SUBDIRS=`pwd`
@@ -210,7 +225,7 @@ VNODE_CONSTRUCTED_OBJS=timestamp.o
 VNODE_BUILT_OBJECTS=$(addprefix $(obj)/,$(ADAPTER_OBJECTS))
 VNODE_GEN_OBJECTS=$(addprefix $(obj)/,$(VNODE_CONSTRUCTED_OBJS))
 MVFS_EXTRA_CFLAGS += $(WARNING_FLAGS) $(RATL_EXTRAFLAGS) -I$(obj) -D_KERNEL $(OPT_SPACE) $(MVFS_MOD_FLAGS)
-$(VNODE_BUILT_OBJECTS) $(VNODE_GEN_OBJECTS) : MVFS_MOD_FLAGS=-Werror -Wunused
+$(VNODE_BUILT_OBJECTS) $(VNODE_GEN_OBJECTS) : MVFS_MOD_FLAGS= -Wunused
 $(VNODE_BUILT_OBJECTS) $(VNODE_GEN_OBJECTS) : ccflags-y+=$(MVFS_EXTRA_CFLAGS)
 $(VNODE_BUILT_OBJECTS) $(VNODE_GEN_OBJECTS) : EXTRA_CFLAGS:=$(EXTRA_CFLAGS) $(MVFS_EXTRA_CFLAGS)
 
@@ -246,4 +261,4 @@ clean: cleano
 
 cleano:
 	-rm -rf *.o *.kobj *.obj *.ko *.mod.? .*.cmd .tmp_versions
-# $Id: b7d97964.5b6211e2.8064.00:01:83:9c:f6:11 $ 
+# $Id: 8fc7e0d7.1fdc11e3.8779.44:37:e6:71:2b:ed $ 

@@ -72,6 +72,24 @@
         HEAP_FREE(var1);                        \
         return ENOMEM;                          \
     }
+#define HEAP_ALLOC3(type1, var1, type2, var2, type3, var3) \
+    HEAP_DEFINE(type1, var1);			\
+    HEAP_DEFINE(type2, var2);			\
+    HEAP_DEFINE(type3, var3);			\
+    HEAP_ALLOC1(type1, var1);			\
+    if (var1 == NULL)				\
+        return ENOMEM;				\
+    HEAP_ALLOC1(type2, var2);			\
+    if (var2 == NULL) {				\
+        HEAP_FREE(var1);			\
+        return ENOMEM;				\
+    }                                           \
+    HEAP_ALLOC1(type3, var3);                    \
+    if (var3 == NULL) {                         \
+        HEAP_FREE(var2);                        \
+        HEAP_FREE(var1);                        \
+        return ENOMEM;                          \
+    }
 
 #define PROVIDE_V8_COMPAT
 
@@ -117,6 +135,15 @@
     int error = 0;                            \
     enum clnt_stat rpc_status = RPC_SUCCESS;  \
     HEAP_ALLOC2(arg_type ## _req_t, rap, arg_type ## _reply_t, rrp)
+
+/* Allocate request and reply structures and a structure containing what
+** were stack variables if stack overflow is a problem.  The restrictions
+** on request and reply structures are as documented above.
+*/
+#define HEAP_ALLOC_RPC_ARGS_AND_VARS(arg_type, type3, var3)         \
+    int error = 0;                            \
+    enum clnt_stat rpc_status = RPC_SUCCESS;  \
+    HEAP_ALLOC3(arg_type ## _req_t, rap, arg_type ## _reply_t, rrp, type3, var3)
 
 /* This helper macro gets the types right based on the downrev name suffix. */
 #define _MVFS_VWCALL(vwvp, vfsp, op, arg_type, opx, argx, cred)   \
@@ -237,7 +264,7 @@ mfs_clnt_getattr_mnp(
         ** mvfs_set_ac_timeout() that needs it.
         */
         mnp->mn_vob.lvut = rrp->lvut;
-        mvfs_attrcache(mnp, vfsp, &(rrp->vstat), FALSE, MVFS_CD2CRED(cd));
+        mvfs_attrcache(mnp, vfsp, &(rrp->vstat), FALSE, cd, TRUE);
 
         /* Fix up stats for a 'history mode' symlink.  The size returned does
         ** not include the hm suffix we will add, because the view_server
@@ -253,7 +280,7 @@ mfs_clnt_getattr_mnp(
         */
         MFS_UPDATE_PARTIAL_VFH(mnp->mn_vob.vfh, rrp->fhandle);
     } else {
-        MVFS_CHK_STALE_MNP(error, mnp, vfsp);
+        MVFS_CHK_STALE_MNP(error, mnp, vfsp, cd);
     }
   done:
     HEAP_FREE(rap);
@@ -280,7 +307,6 @@ mfs_clnt_getattr(
     MLOCK(VTOM(vp));
     error = mfs_clnt_getattr_mnp(VTOM(vp), vp->v_vfsp, cd);
     MUNLOCK(VTOM(vp));
-            
     return(error);
 }
 
@@ -486,7 +512,7 @@ mvfs_clnt_setattr_locked(
 		      rrp->vstat.fstat.ctime.tv_usec, wcred));
         }
 #endif
-        mvfs_attrcache(mnp, vp->v_vfsp, &(rrp->vstat), 0, MVFS_CD2CRED(cd));
+        mvfs_attrcache(mnp, vp->v_vfsp, &(rrp->vstat), 0, cd, TRUE);
 
 	/* Clear bits if we have sync'd (or set) the mtime */
 	if (rap->sattr.mask != 0)
@@ -605,14 +631,14 @@ mfs_clnt_remove(
     dtm_save = rap->dir_dtm = mnp->mn_vob.attr.fstat.mtime;
 
     /* Remove NC ent before call to view */
-    mfs_dncremove(dvp, nm, MVFS_CD2CRED(cd));
+    mfs_dncremove(dvp, nm, cd);
 
     MVFS_VWCALL(vw, dvp->v_vfsp, VIEW_REMOVE, view_remove, );
 
     if (!error) error = mfs_geterrno(rrp->hdr.status);
     if (!error) {
         mvfs_attrcache(mnp, dvp->v_vfsp, &(rrp->dir_mod.dvstat),
-                       rrp->dir_mod.dir_dtm_valid, MVFS_CD2CRED(cd));
+                       rrp->dir_mod.dir_dtm_valid, cd, TRUE);
         MVFS_CLNT_RDDIR_CACHE_CHECK(mnp, dvp, nm, dtm_save, "mvfs_clnt_remove");
     } else {
         MFS_CHK_STALE(error, dvp);
@@ -628,6 +654,22 @@ mfs_clnt_remove(
  * MFS_CLNT_LOOKUP - call view for lookup op
  */
 
+/* Define structure to contain variables used in clnt_lookup to reduce stack
+ * usage for platforms short on stack space.
+ */
+typedef struct mvfs_clnt_lookup_vars {
+    VNODE_T *vw;
+    mfs_mnode_t *mnp;
+    view_hm_warp_opt_t hm_warp_opt;
+    int hm;
+    int hmwarp;
+    struct timeval mtime;
+    int isdotdot;
+    int pri;
+    u_int dncflags;
+    int view_op;
+} mvfs_clnt_lookup_vars_t;
+
 int
 mfs_clnt_lookup(
     VNODE_T *dvp,
@@ -636,22 +678,17 @@ mfs_clnt_lookup(
     CALL_DATA_T *cd
 )
 {
-    VNODE_T *vw;
-    mfs_mnode_t *mnp;
-    view_hm_warp_opt_t hm_warp_opt = VIEW_HM_WARP_OPT_NONE;
-    int hm, hmwarp;
-    struct timeval mtime;
-    int isdotdot = 0;
-    int pri;
-    u_int dncflags;
-    HEAP_ALLOC_RPC_ARGS(view_lookup);
+    HEAP_ALLOC_RPC_ARGS_AND_VARS(view_lookup, mvfs_clnt_lookup_vars_t, lvp);
 
-    vw = MFS_VIEW(dvp);
-    if (vw == NULL) {
-	error = ESRCH;
+    lvp->hm_warp_opt = VIEW_HM_WARP_OPT_NONE;
+    lvp->isdotdot = 0;
+    lvp->view_op = VIEW_LOOKUP;
+    lvp->vw = MFS_VIEW(dvp);
+    if (lvp->vw == NULL) {
+        error = ESRCH;
         goto done;
     }
-    MVFS_INIT_TIMEVAL(mtime);
+    MVFS_INIT_TIMEVAL(lvp->mtime);
     /* 
      * Look for history mode warp names and handle as follows:
      * Cases are:
@@ -689,18 +726,18 @@ mfs_clnt_lookup(
      * of the current directory.  (Generally this really means a lookup
      * of "."!!)
      */
-    hm = mfs_hmname(nm, &rap->name);	/* Get "stripped" name in rap->name */
-    if (hm) {
-	hm_warp_opt = VIEW_HM_WARP_OPT_ELEMENT_WARP;	/* Warp to element */
+    lvp->hm = mfs_hmname(nm, &rap->name);	/* Get "stripped" name in rap->name */
+    if (lvp->hm) {
+	lvp->hm_warp_opt = VIEW_HM_WARP_OPT_ELEMENT_WARP;	/* Warp to element */
 	/* rap->name already has stripped hm name */
     } else {
-	hm_warp_opt = VIEW_HM_WARP_OPT_NONE;	/* No warp */
+	lvp->hm_warp_opt = VIEW_HM_WARP_OPT_NONE;	/* No warp */
 	rap->name = nm;
     }
     /*
      * Check for HM warp to version e.g. handling of "^@@"
      */
-    if (hm && rap->name[0] == MVFS_VX_VERS_CHAR && rap->name[1] == '\0') {
+    if (lvp->hm && rap->name[0] == MVFS_VX_VERS_CHAR && rap->name[1] == '\0') {
   	/* Have found ^@@ in non-hm mode.  Rewrite the name lookup
      	 * to be ".", and the warp mode to be to the VERSION instead
       	 * of the element.  Ok to rewrite the string because
@@ -709,7 +746,7 @@ mfs_clnt_lookup(
 	 */
 	ASSERT(rap->name != nm);
 	rap->name[0] = '.';
-	hm_warp_opt = VIEW_HM_WARP_OPT_VERSION_WARP;
+	lvp->hm_warp_opt = VIEW_HM_WARP_OPT_VERSION_WARP;
     }
     /* 
      * Check for various cases.  
@@ -720,12 +757,12 @@ mfs_clnt_lookup(
 	/* Check for "." cases */
 
         if (rap->name[1] == '\0') {
-	    if (!hm) {		/* Leafname not History Mode i.e. just "." */
+	    if (!lvp->hm) {		/* Leafname not History Mode i.e. just "." */
     	        *vpp = dvp;
                 VN_HOLD(dvp);
                 error = 0;
                 goto done;
-	    } else if (VTOM(vw)->mn_view.hm) {  /* ".@@" when already in HM */
+	    } else if (VTOM(lvp->vw)->mn_view.hm) {  /* ".@@" when already in HM */
 		*vpp = dvp;
 		VN_HOLD(dvp);
 		STRFREE(rap->name);
@@ -737,21 +774,22 @@ mfs_clnt_lookup(
 	 * Set flag if ".." - this is used later to
 	 * control locking order.
 	 */
-        isdotdot = (rap->name[1] == '.' && rap->name[2] == '\0');
+        lvp->isdotdot = (rap->name[1] == '.' && rap->name[2] == '\0');
     }
 
-    rap->hdr.view = VTOM(vw)->mn_view.vh;
+    rap->hdr.view = VTOM(lvp->vw)->mn_view.vh;
     rap->hdr.build_handle = MFS_BH(cd);
     rap->d_fhandle = MFS_VFH(dvp);
-    rap->hm_warp_opt = hm_warp_opt;
+    rap->hm_warp_opt = lvp->hm_warp_opt;
     rap->residual_pname = "";	/* FIXME: Residual pathname, none for now ... */
 
-    mnp=VTOM(dvp);
-    MLOCK(mnp);
+    lvp->mnp=VTOM(dvp);
+retry:
+    MLOCK(lvp->mnp);
 
-    MVFS_VWCALL(vw, dvp->v_vfsp, VIEW_LOOKUP, view_lookup, );
+    MVFS_VWCALL(lvp->vw, dvp->v_vfsp, VIEW_LOOKUP, view_lookup, );
 
-    if (hm) {
+    if (lvp->hm) {
 	ASSERT(rap->name != nm);
 	STRFREE(rap->name);	/* Free allocated stripped name */
     }
@@ -765,19 +803,19 @@ mfs_clnt_lookup(
          * could get cataloged in the namespace.
 	 */
 	
-	if (mnp->mn_vob.vfh.ver_dbid == rrp->fhandle.ver_dbid &&
-	    mnp->mn_vob.vfh.gen == rrp->fhandle.gen &&
-            ((mnp->mn_vob.vfh.flags ^ rrp->fhandle.flags) & 
+	if (lvp->mnp->mn_vob.vfh.ver_dbid == rrp->fhandle.ver_dbid &&
+	    lvp->mnp->mn_vob.vfh.gen == rrp->fhandle.gen &&
+	    ((lvp->mnp->mn_vob.vfh.flags ^ rrp->fhandle.flags) & 
              VIEW_FHANDLE_FLAGS_HISTORY_MODE) == 0 &&
-	    BCMP(&mnp->mn_vob.vfh.vob_uuid, &(rrp->fhandle.vob_uuid),
-                 sizeof(tbs_uuid_t)) == 0)
-        {
+	    BCMP(&lvp->mnp->mn_vob.vfh.vob_uuid, 
+                 &rrp->fhandle.vob_uuid, sizeof(tbs_uuid_t)) == 0)
+            {
 		*vpp = dvp;
 		VN_HOLD(dvp);
 	        mfs_dncadd(dvp, 
                            rrp->bh_invariant ? MFS_DNC_BHINVARIANT : 0, 
-                           nm, *vpp, MVFS_CD2CRED(cd));
-		MUNLOCK(mnp);
+                           nm, *vpp, cd);
+		MUNLOCK(lvp->mnp);
 		mvfs_log(MFS_LOG_INFO, 
                          "vw lookup: vw=%s vob=%s dbid=0x%x nm=%s hardlink "
                          "to '.'!\n",
@@ -816,9 +854,9 @@ mfs_clnt_lookup(
          * RPC at a time!), and the value of the name cache to performance
          * far outweighs anything else.
          */
-	if (isdotdot) {
-	    mtime = mnp->mn_vob.attr.fstat.mtime;
-	    MUNLOCK(mnp);
+	if (lvp->isdotdot) {
+	    lvp->mtime = lvp->mnp->mn_vob.attr.fstat.mtime;
+	    MUNLOCK(lvp->mnp);
 	}
 
         /*
@@ -832,11 +870,22 @@ mfs_clnt_lookup(
         {
             rrp->vstat.fstat.size += mfs_hmsuffix_len();
         }
-        error = mfs_makevobnode(&(rrp->vstat), &(rrp->lvut), vw, &(rrp->fhandle),
-                                dvp->v_vfsp, MVFS_CD2CRED(cd), vpp);
+        error = mfs_makevobnode(&(rrp->vstat), &(rrp->lvut), lvp->vw,
+                                &(rrp->fhandle), dvp->v_vfsp, cd,
+                                vpp);
 
-        if (isdotdot) {	
-	    MLOCK(mnp);	/* Must relock the dir */
+        if (error == ENOENT) {
+            /* This happens on Linux if VNGET finds that the vnode is in 
+             * the process of being deleted.  There is a potential race with
+             * the invalidate code, so we have to unlock the parent to give
+             * the invalidate a chance to finish and then we will try again.
+             */
+            if (!lvp->isdotdot)
+                MUNLOCK(lvp->mnp);
+            goto retry;
+        }
+        if (lvp->isdotdot) {	
+	    MLOCK(lvp->mnp);	/* Must relock the dir */
 	    if (!error) {
 		/* Only add to name cache if noone has invalidated the
                  * attributes and mtime has not changed.  For this
@@ -845,28 +894,28 @@ mfs_clnt_lookup(
                  * (e.g. due to a dir op).
                  */
 	        if (MFS_ATTRISVALID(dvp) && 
-                    MFS_TVEQ(mtime, mnp->mn_vob.attr.fstat.mtime))
+		    MFS_TVEQ(lvp->mtime, lvp->mnp->mn_vob.attr.fstat.mtime))
                 {
-		    mfs_dncadd(dvp, rrp->bh_invariant ? MFS_DNC_BHINVARIANT : 0,
-                               nm, *vpp, MVFS_CD2CRED(cd));
+                    mfs_dncadd(dvp, rrp->bh_invariant ? MFS_DNC_BHINVARIANT : 0,
+                               nm, *vpp, cd);
 	        } else {
 		    /* Count this as an add race. */
 		    BUMPSTAT(mfs_dncstat.dnc_addunlock);
-                    BUMPVSTATV(vw,dncstat.dnc_addunlock);
+                    BUMP_VDNCSTATV(lvp->vw, dncstat.dnc_addunlock);
 	        }
 	    }
 	} else {	/* Normal lookups */
             if (!error) {
 	        mfs_dncadd(dvp, rrp->bh_invariant ? MFS_DNC_BHINVARIANT : 0,
-                           nm, *vpp, MVFS_CD2CRED(cd));
+                           nm, *vpp, cd);
 		switch (MVFS_GETVTYPE(*vpp)) {
 		case VDIR:
 		    BUMPSTAT(mfs_dncstat.dnc_missdir);
-                    BUMPVSTATV(vw,dncstat.dnc_missdir);
+                    BUMP_VDNCSTATV(lvp->vw, dncstat.dnc_missdir);
 		    break;
 		case VREG:
 		    BUMPSTAT(mfs_dncstat.dnc_missreg);
-                    BUMPVSTATV(vw,dncstat.dnc_missreg);
+                    BUMP_VDNCSTATV(lvp->vw, dncstat.dnc_missreg);
 		    break;
 		  default:
 		    break;
@@ -882,10 +931,10 @@ mfs_clnt_lookup(
          * a translation BH_INVARIANT for a view-pvt dir, since ref
          * time can't affect the result of view-pvt dir translations.
          */
-	if (VIEW_ISA_VIEW_OBJ(&mnp->mn_vob.vfh))
-	    dncflags = MFS_DNC_BHINVARIANT;
+	if (VIEW_ISA_VIEW_OBJ(&lvp->mnp->mn_vob.vfh))
+	    lvp->dncflags = MFS_DNC_BHINVARIANT;
 	else
-	    dncflags = 0;
+	    lvp->dncflags = 0;
 	/*
 	 * If the reason this is not visible is because it's not there,
 	 * then we can cache the result specially and avoid some inefficient
@@ -894,11 +943,11 @@ mfs_clnt_lookup(
 	if ((rrp->name_state & VIEW_NAME_STATE_NOT_VISIBLE) ==
 	    VIEW_NAME_STATE_ENOTENT)
         {
-	    dncflags |= MFS_DNC_NOTINDIR;
+	    lvp->dncflags |= MFS_DNC_NOTINDIR;
         }
-	mfs_dncadd(dvp, dncflags, nm, NULL, MVFS_CD2CRED(cd));
+	mfs_dncadd(dvp, lvp->dncflags, nm, NULL, cd);
 	BUMPSTAT(mfs_dncstat.dnc_missnoent);
-	BUMPVSTATV(vw,dncstat.dnc_missnoent);
+        BUMP_VDNCSTATV(lvp->vw, dncstat.dnc_missnoent);
 	/* 
          * Log ENOENT lookup if debug, or at DEBUG level if
 	 * the underlying error is "no version selected"
@@ -916,10 +965,11 @@ mfs_clnt_lookup(
     } else {
 	MFS_CHK_STALE(error, dvp);
     }
-    MUNLOCK(mnp);
+    MUNLOCK(lvp->mnp);
   done:
     HEAP_FREE(rap);
     HEAP_FREE(rrp);
+    HEAP_FREE(lvp);
     return(error);
 }
 
@@ -980,13 +1030,14 @@ mfs_clnt_create(
     if (!error) error = mfs_geterrno(rrp->hdr.status);
     if (!error) {
         mvfs_attrcache(mnp, dvp->v_vfsp, &(rrp->dir_mod.dvstat),
-                       rrp->dir_mod.dir_dtm_valid, MVFS_CD2CRED(cd));
+                       rrp->dir_mod.dir_dtm_valid, cd, TRUE);
         MVFS_CLNT_RDDIR_CACHE_CHECK(mnp, dvp, nm, dtm_save, "mvfs_clnt_create");
         error = mfs_makevobnode(&(rrp->vstat), 0, vw, &(rrp->fhandle),
-                                dvp->v_vfsp, MVFS_CD2CRED(cd), vpp);
+                                dvp->v_vfsp, cd, vpp);
+	
 	if (!error) {
 	    /* Creates must be in view, and these are BH invariant */
-	    mfs_dncadd(dvp, MFS_DNC_BHINVARIANT, nm, *vpp, MVFS_CD2CRED(cd));
+	    mfs_dncadd(dvp, MFS_DNC_BHINVARIANT, nm, *vpp, cd);
 	    MLOCK(VTOM(*vpp));
 	    /* Creates can't be in VOB */
 	    VTOM(*vpp)->mn_vob.cleartext.isvob = 0;
@@ -1055,11 +1106,11 @@ mfs_clnt_link(
     if (!error) error = mfs_geterrno(rrp->hdr.status);
     if (!error) {
         mvfs_attrcache(tdmnp, tdvp->v_vfsp, &(rrp->dir_mod.dvstat),
-                       rrp->dir_mod.dir_dtm_valid, MVFS_CD2CRED(cd));
+                       rrp->dir_mod.dir_dtm_valid, cd, TRUE);
         MVFS_CLNT_RDDIR_CACHE_CHECK(tdmnp, tdvp, tnm, dtm_save, "mvfs_clnt_link");
 
 	/* Link must be in view, and this is BH invariant */
-	mfs_dncadd(tdvp, MFS_DNC_BHINVARIANT, tnm, vp, MVFS_CD2CRED(cd));
+	mfs_dncadd(tdvp, MFS_DNC_BHINVARIANT, tnm, vp, cd);
     } else {
         MFS_CHK_STALE(error, vp);
         MFS_CHK_STALE(error, tdvp);
@@ -1141,8 +1192,8 @@ mfs_clnt_rename(
        exists when we do dump the name cache entries and the
        refcnt goes to zero (rename over an existing file) */
 
-    mfs_dncremove(odvp, onm, MVFS_CD2CRED(cd));
-    mfs_dncremove(tdvp, tnm, MVFS_CD2CRED(cd));
+    mfs_dncremove(odvp, onm, cd);
+    mfs_dncremove(tdvp, tnm, cd);
 
     MVFS_VWCALL(vw, odvp->v_vfsp, VIEW_RENAME, view_rename, );
 
@@ -1150,7 +1201,7 @@ mfs_clnt_rename(
     if (!error) error = mfs_geterrno(rrp->hdr.status);
     if (!error) {
         mvfs_attrcache(tdmnp, tdvp->v_vfsp, &(rrp->dir_mod.dvstat),
-                       rrp->dir_mod.dir_dtm_valid, MVFS_CD2CRED(cd));
+                       rrp->dir_mod.dir_dtm_valid, cd, TRUE);
         MVFS_CLNT_RDDIR_CACHE_CHECK(tdmnp, tdvp, tnm, tdtm_save,
                                     "mvfs_clnt_rename");
 
@@ -1235,13 +1286,13 @@ mfs_clnt_mkdir(
     if (!error) error = mfs_geterrno(rrp->hdr.status);
     if (!error) {
         mvfs_attrcache(mnp, dvp->v_vfsp, &(rrp->dir_mod.dvstat),
-                       rrp->dir_mod.dir_dtm_valid, MVFS_CD2CRED(cd));
+                       rrp->dir_mod.dir_dtm_valid, cd, TRUE);
         MVFS_CLNT_RDDIR_CACHE_CHECK(mnp, dvp, nm, dtm_save, "mvfs_clnt_mkdir");
         error = mfs_makevobnode(&(rrp->vstat), 0, vw, &(rrp->fhandle),
-                                dvp->v_vfsp, MVFS_CD2CRED(cd), vpp);
+                                dvp->v_vfsp, cd, vpp);
         if (!error) {
 	    /* Mkdir must be in view, and these are BH invariant */
-	    mfs_dncadd(dvp, MFS_DNC_BHINVARIANT, nm, *vpp, MVFS_CD2CRED(cd));
+	    mfs_dncadd(dvp, MFS_DNC_BHINVARIANT, nm, *vpp, cd);
         }
     } else {
         MFS_CHK_STALE(error, dvp);
@@ -1294,15 +1345,14 @@ mfs_clnt_rmdir(
     MLOCK(mnp);
     dtm_save = rap->dir_dtm = mnp->mn_vob.attr.fstat.mtime;
 
-    /* Remove NC ent before call to view */
-    mfs_dncremove(dvp, nm, MVFS_CD2CRED(cd));
+    mfs_dncremove(dvp, nm, cd);    /* Remove NC ent before call to view */
 
     MVFS_VWCALL(vw, dvp->v_vfsp, VIEW_RMDIR, view_rmdir, );
 
     if (!error) error = mfs_geterrno(rrp->hdr.status);
     if (!error) {
         mvfs_attrcache(mnp, dvp->v_vfsp, &(rrp->dir_mod.dvstat), 
-                       rrp->dir_mod.dir_dtm_valid, MVFS_CD2CRED(cd));
+                       rrp->dir_mod.dir_dtm_valid, cd, TRUE);
         MVFS_CLNT_RDDIR_CACHE_CHECK(mnp, dvp, nm, dtm_save, "mvfs_clnt_rmdir");
     } else {
         MFS_CHK_STALE(error, dvp);
@@ -1356,7 +1406,7 @@ mfs_clnt_symlink(
     dtm_save = rap->dir_dtm = mnp->mn_vob.attr.fstat.mtime;
 
     /* Remove name in case ENOENT cached */
-    mfs_dncremove(dvp, lnm, MVFS_CD2CRED(cd));
+    mfs_dncremove(dvp, lnm, cd);
 
     MVFS_VWCALL(vw, dvp->v_vfsp, VIEW_SYMLINK, view_symlink, );
 
@@ -1364,14 +1414,14 @@ mfs_clnt_symlink(
     if (!error) error = mfs_geterrno(rrp->hdr.status);
     if (!error) {
 	mvfs_attrcache(mnp, dvp->v_vfsp, &(rrp->dir_mod.dvstat),
-                       rrp->dir_mod.dir_dtm_valid, MVFS_CD2CRED(cd));
+                       rrp->dir_mod.dir_dtm_valid, cd, TRUE);
         MVFS_CLNT_RDDIR_CACHE_CHECK(mnp, dvp, tnm, dtm_save,
                                     "mvfs_clnt_symlink");
         error = mfs_makevobnode(&(rrp->vstat), 0, vw, &(rrp->fhandle),
-                                dvp->v_vfsp, MVFS_CD2CRED(cd), vpp);
+                                dvp->v_vfsp, cd, vpp);
         if (!error) {
 	    /* Create symlink must be in view, and these are BH invariant */
-	    mfs_dncadd(dvp, MFS_DNC_BHINVARIANT, lnm, *vpp, MVFS_CD2CRED(cd));
+	    mfs_dncadd(dvp, MFS_DNC_BHINVARIANT, lnm, *vpp, cd);
         }
     } else {
 	MFS_CHK_STALE(error, dvp);
@@ -1700,6 +1750,7 @@ mfs_clnt_choid_locked(
 {
     VNODE_T *vw;
     mfs_mnode_t *mnp;
+    int update_attrs;
     HEAP_ALLOC_RPC_ARGS(view_change_oid);
 
     mnp = VTOM(vp);
@@ -1728,8 +1779,10 @@ mfs_clnt_choid_locked(
     if (!error) error = mfs_geterrno(rrp->hdr.status);
     if (!error) {
 	/* Cache new attributes */
-        mvfs_attrcache(mnp, vp->v_vfsp, &(rrp->vstat), 0, MVFS_CD2CRED(cd));
+        update_attrs = TRUE;
+		mvfs_attrcache(mnp, vp->v_vfsp, &(rrp->vstat), 0, cd, update_attrs);
 	/* NOTE: cleartext may have changed... higher layer must handle! */
+
     } else {
 	MFS_CHK_STALE(error, vp);
     }
@@ -1804,7 +1857,7 @@ mfs_clnt_bindroot(
 
 	/* Now we can make the vnode */
         error = mfs_makevobnode(&(rrp->vstat), &(rrp->lvut), vw,
-                                &(rrp->fhandle), vfsp, MVFS_CD2CRED(cd), vpp);
+                                &(rrp->fhandle), vfsp, cd, vpp);
     } else {
 	if (error == ENOENT) {
 	    if (rrp->hdr.status == TBS_ST_VIEW_NO_VER) {
@@ -1882,7 +1935,7 @@ mfs_clnt_rebind_dir(
 	    VN_HOLD(*vpp);
 	    MLOCK(mnp);
             mvfs_attrcache(mnp, dvp->v_vfsp, &(rrp->vstat), FALSE,
-                           MVFS_CD2CRED(cd));
+                           cd, TRUE);
 	    MUNLOCK(mnp);
             error = 0;
             goto done;
@@ -1895,7 +1948,7 @@ mfs_clnt_rebind_dir(
 	 * of the same dir.  SO... dvp must be unlocked!
          */
         error = mfs_makevobnode(&(rrp->vstat), 0, vw, &(rrp->fhandle),
-                                dvp->v_vfsp, MVFS_CD2CRED(cd), vpp);
+                                dvp->v_vfsp, cd, vpp);
     } else {
 	MFS_CHK_STALE(error, dvp);
     }
@@ -2157,7 +2210,7 @@ mfs_clnt_change_mtype(
 
     if (!error && *statusp == TBS_ST_OK) {
 	/* Cache new attributes */
-        mvfs_attrcache(mnp, vp->v_vfsp, &(rrp->vstat), 0, MVFS_CD2CRED(cd));
+		mvfs_attrcache(mnp, vp->v_vfsp, &(rrp->vstat), 0, cd, TRUE);
     } else {
 	xerror = mfs_geterrno(rrp->hdr.status);
 	MFS_CHK_STALE(xerror, vp);
@@ -2221,6 +2274,7 @@ mvfs_clnt_get_eacl_mnp(
 )
 {
     VNODE_T *vw;
+    MVFS_DECLARE_TEMP_CD(temp_cd);
     tbs_status_t status = TBS_ST_OK;
     HEAP_ALLOC_RPC_ARGS(view_eacl_rolemap);
     
@@ -2279,7 +2333,8 @@ mvfs_clnt_get_eacl_mnp(
         ** The EACL caching/flushing on error is handled by our caller (which is
         ** different from the attribute caching handled by CHK_STALE).
         */
-        MVFS_CHK_STALE_MNP(mfs_geterrno(status), mnp, vfsp);
+        MVFS_INIT_TEMP_CD(temp_cd_p, cred, mvfs_mythread(NULL));
+        MVFS_CHK_STALE_MNP(mfs_geterrno(status), mnp, vfsp, temp_cd_p);
     }
   done:
     HEAP_FREE(rap);
@@ -2287,4 +2342,4 @@ mvfs_clnt_get_eacl_mnp(
     *statusp = status;
     return(error);
 }
-static const char vnode_verid_mvfs_clnt_c[] = "$Id:  bf8270fd.804f11e2.822a.00:01:84:c3:8a:52 $";
+static const char vnode_verid_mvfs_clnt_c[] = "$Id:  fbe2eb56.cabb454a.8ea9.53:25:f2:4e:f6:0d $";

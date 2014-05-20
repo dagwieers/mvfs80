@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 1999, 2008 IBM Corporation.
+ * Copyright (C) 1999, 2013 IBM Corporation.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -51,7 +51,7 @@
 
 int mvfs_major = 0;   /* Linux will pick one if we specify 0 */
 
-int mvfs_majdynmax = 2;
+int mvfs_majdynmax = 8;
 int mvfs_majfixmax = 0;
 u_int mvfs_view_shift_bits = 10;
-static const char vnode_verid_mvfs_param_c[] = "$Id:  ad777f26.9c9311dd.9a62.00:01:83:29:c0:fc $";
+static const char vnode_verid_mvfs_param_c[] = "$Id:  cf7a981c.2d3011e3.9f97.44:37:e6:71:2b:ed $";

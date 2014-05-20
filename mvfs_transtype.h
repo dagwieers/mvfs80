@@ -536,6 +536,7 @@ struct mfs_auditrec_32 {
 
 struct mvfs_viewstats_32 {
     struct mfs_strbuf_32 viewtag;
+    struct mfs_strbuf_32 mvfs_pview_stat_enabled;
     struct mvfs_statbufs_32 stats;
 };
 
@@ -610,4 +611,4 @@ extern void mvfs_vobinfo_to_mvfs_vobinfo_32(struct mvfs_vobinfo *vbl, struct mvf
 #endif /* ATRIA_LP64 || ATRIA_LLP64 */
 
 #endif /* MVFS_TRANSTYPE_H_ */
-/* $Id: b45977e4.5b6211e2.8064.00:01:83:9c:f6:11 $ */
+/* $Id: d7c81c9c.009611e3.8267.00:01:84:c3:8a:52 $ */

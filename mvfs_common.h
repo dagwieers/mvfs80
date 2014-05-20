@@ -1,4 +1,4 @@
-/* * (C) Copyright IBM Corporation 2006, 2012. */
+/* * (C) Copyright IBM Corporation 2006, 2013. */
 /*
  This program is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License as published by
@@ -38,6 +38,8 @@ typedef struct mvfs_common_data
     int mvfs_rdcenabled;
     int mvfs_rebind_dir_enable;
     int mvfs_vlinkcnt2;
+    int mvfs_pview_stat_enabled;        /* Tunable to enable/disable
+                                           per-view statistics */
 
     int mvfs_ctxt_atime_refresh;
     int mvfs_dncdirmax;
@@ -68,6 +70,6 @@ typedef struct mvfs_common_data
 } mvfs_common_data_t;
 
 EXTERN int mvfs_copy_tunable(mvfs_common_data_t *mcdp);
-EXTERN void mfs_periodic_maintenance(P_NONE);
+EXTERN void mfs_periodic_maintenance(CALL_DATA_T *cd);
 #endif /* MVFS_COMMON_H_ */
-/* $Id: a03ad4c4.f14111e1.9c93.00:01:84:c3:8a:52 $ */
+/* $Id: fd954e01.c00f4725.8957.fb:4a:5e:2a:05:66 $ */

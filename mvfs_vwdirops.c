@@ -1,4 +1,4 @@
-/* * (C) Copyright IBM Corporation 1991, 2011. */
+/* * (C) Copyright IBM Corporation 1991, 2012. */
 /*
  This program is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License as published by
@@ -33,18 +33,21 @@ STATIC int
 mvfs_ramdir_insert(
     VNODE_T *dvp,
     char *nm,
-    VNODE_T *vp
+    VNODE_T *vp,
+    CALL_DATA_T *cd
 );
 
 /* MFS_RAMDIR_ADD - add a ramdir link to a vnode.
    Assumes the vnode pointer is already held. */
 
 int
-mfs_ramdir_add(dvp, nm, vp, num)
-VNODE_T *dvp;
-char *nm;
-VNODE_T *vp;
-int *num;		/* returned slot used */
+mfs_ramdir_add(
+    VNODE_T *dvp,
+    char *nm,
+    VNODE_T *vp,
+    int *num,		/* returned slot used */
+    CALL_DATA_T *cd
+)
 {
     register mfs_mnode_t *mnp;
     register int vnum;
@@ -81,19 +84,19 @@ int *num;		/* returned slot used */
     /* If have a slot, fill it in.  Otherwise return an error */
 
     if (freevnum != -1) {
-	mnp->mn_ramdir.ents[freevnum].nm = STRDUP(nm);
-	if (mnp->mn_ramdir.ents[freevnum].nm == NULL) error = ENOMEM;
-	else {
-	    mnp->mn_ramdir.ents[freevnum].vp = vp;
-    	    mnp->mn_ramdir.mtime.tv_sec = MDKI_CTIME();	
-	    if (MVFS_ISVTYPE(vp, VDIR))
-	        mnp->mn_ramdir.lnk_cnt++;
-	    *num = freevnum;	/* Return slot number used */
+        mnp->mn_ramdir.ents[freevnum].nm = STRDUP(nm);
+        if (mnp->mn_ramdir.ents[freevnum].nm == NULL) error = ENOMEM;
+        else {
+            mnp->mn_ramdir.ents[freevnum].vp = vp;
+            mnp->mn_ramdir.mtime.tv_sec = MDKI_CTIME();	
+            if (MVFS_ISVTYPE(vp, VDIR))
+                mnp->mn_ramdir.lnk_cnt++;
+            *num = freevnum;	/* Return slot number used */
             error = 0;
-            MVFS_WRAP_UPDATE_ATTRS(dvp);
-	}
+            MVFS_WRAP_UPDATE_ATTRS(dvp, cd);
+        }
     } else {
-	error = ENOSPC;
+        error = ENOSPC;
     }
 
     MUNLOCK(mnp);
@@ -106,10 +109,12 @@ int *num;		/* returned slot used */
    caller). */
 
 int
-mfs_ramdir_remove(dvp, nm, vpp)
-VNODE_T *dvp;
-char *nm;
-VNODE_T **vpp;
+mfs_ramdir_remove(
+    VNODE_T *dvp,
+    char *nm,
+    VNODE_T **vpp,
+    CALL_DATA_T *cd
+)
 {
     register mfs_mnode_t *mnp;
     register int vnum;
@@ -122,27 +127,27 @@ VNODE_T **vpp;
 
     error = ENOENT;
     for (vnum=0; vnum < mnp->mn_ramdir.hwm; vnum++) {
-	if (mnp->mn_ramdir.ents[vnum].nm == NULL) continue;
-	if (STRCMP(mnp->mn_ramdir.ents[vnum].nm, nm) == 0) {
-	    if (MVFS_ISVTYPE(mnp->mn_ramdir.ents[vnum].vp, VDIR))
-	        mnp->mn_ramdir.lnk_cnt--;
-	    *vpp = mnp->mn_ramdir.ents[vnum].vp;  /* return vnode */
- 	    mnp->mn_ramdir.ents[vnum].vp = NULL;
-	    STRFREE(mnp->mn_ramdir.ents[vnum].nm);
+        if (mnp->mn_ramdir.ents[vnum].nm == NULL) continue;
+        if (STRCMP(mnp->mn_ramdir.ents[vnum].nm, nm) == 0) {
+            if (MVFS_ISVTYPE(mnp->mn_ramdir.ents[vnum].vp, VDIR))
+                mnp->mn_ramdir.lnk_cnt--;
+            *vpp = mnp->mn_ramdir.ents[vnum].vp;  /* return vnode */
+            mnp->mn_ramdir.ents[vnum].vp = NULL;
+            STRFREE(mnp->mn_ramdir.ents[vnum].nm);
 
-    	    mnp->mn_ramdir.mtime.tv_sec = MDKI_CTIME();	
+            mnp->mn_ramdir.mtime.tv_sec = MDKI_CTIME();	
 
-	    /* Update high water mark if required */
-	
-	    if (vnum == mnp->mn_ramdir.hwm-1) {
-		while (mnp->mn_ramdir.ents[--vnum].nm == NULL) {}
-		mnp->mn_ramdir.hwm = vnum+1;
-	    }
+            /* Update high water mark if required */
+        
+            if (vnum == mnp->mn_ramdir.hwm-1) {
+                while (mnp->mn_ramdir.ents[--vnum].nm == NULL) {}
+                mnp->mn_ramdir.hwm = vnum+1;
+            }
 
-	    error = 0;
-            MVFS_WRAP_UPDATE_ATTRS(dvp);
-	    break;
-	}
+            error = 0;
+            MVFS_WRAP_UPDATE_ATTRS(dvp, cd);
+            break;
+        }
     }
     MUNLOCK(mnp);
     if (error)
@@ -158,9 +163,11 @@ VNODE_T **vpp;
  */
 
 void
-mfs_ramdir_purgevp(dvp, vp)
-VNODE_T *dvp;
-VNODE_T *vp;
+mfs_ramdir_purgevp(
+    VNODE_T *dvp,
+    VNODE_T *vp,
+    CALL_DATA_T *cd
+)
 {
     register mfs_mnode_t *mnp;
     register int vnum;
@@ -174,15 +181,15 @@ VNODE_T *vp;
     /* Must continue scan to remove multiple links to same object. */
 
     for (vnum=0; vnum < mnp->mn_ramdir.hwm; vnum++) {
-	if (mnp->mn_ramdir.ents[vnum].vp == vp) {
-	    if (MVFS_ISVTYPE(vp, VDIR))
-	        mnp->mn_ramdir.lnk_cnt--;
-	    VN_RELE(vp);
- 	    mnp->mn_ramdir.ents[vnum].vp = NULL;
-	    ASSERT(mnp->mn_ramdir.ents[vnum].nm);
-	    STRFREE(mnp->mn_ramdir.ents[vnum].nm);
+        if (mnp->mn_ramdir.ents[vnum].vp == vp) {
+            if (MVFS_ISVTYPE(vp, VDIR))
+                mnp->mn_ramdir.lnk_cnt--;
+            ATRIA_VN_RELE(vp, cd);
+            mnp->mn_ramdir.ents[vnum].vp = NULL;
+            ASSERT(mnp->mn_ramdir.ents[vnum].nm);
+            STRFREE(mnp->mn_ramdir.ents[vnum].nm);
 
-    	    mnp->mn_ramdir.mtime.tv_sec = MDKI_CTIME();	
+            mnp->mn_ramdir.mtime.tv_sec = MDKI_CTIME();	
 
             /* Update high water mark if releasing the highest slot */
 
@@ -199,9 +206,11 @@ VNODE_T *vp;
 /* MFS_RAMDIR_PURGE - purge all entries in a ramdir. */
 
 void
-mfs_ramdir_purge(dvp, release)
-VNODE_T *dvp;
-int release;
+mfs_ramdir_purge(
+    VNODE_T *dvp,
+    int release,
+    CALL_DATA_T *cd
+)
 {
     register mfs_mnode_t *mnp;
     register int vnum;
@@ -220,9 +229,10 @@ int release;
             MVFS_DECREMENT_LINK(mnp->mn_ramdir.ents[vnum].vp);
             if (MVFS_ISVTYPE(mnp->mn_ramdir.ents[vnum].vp, VDIR))
                 mnp->mn_ramdir.lnk_cnt--;
-	    if (release) VN_RELE(mnp->mn_ramdir.ents[vnum].vp);
-	    mnp->mn_ramdir.ents[vnum].vp = NULL;
-	}
+            if (release)
+                ATRIA_VN_RELE(mnp->mn_ramdir.ents[vnum].vp, cd);
+            mnp->mn_ramdir.ents[vnum].vp = NULL;
+        }
     }
 }
 
@@ -271,7 +281,8 @@ STATIC int
 mvfs_ramdir_insert(
     VNODE_T *dvp,
     char *nm,
-    VNODE_T *vp
+    VNODE_T *vp,
+    CALL_DATA_T *cd
 )
 {
     int num, error;
@@ -283,14 +294,14 @@ mvfs_ramdir_insert(
        could come along and VN_RELE it.  This extra count
        makes sure we don't lose it. */
     VN_HOLD(vp);
-    error = mfs_ramdir_add(dvp, nm, vp, &num);
+    error = mfs_ramdir_add(dvp, nm, vp, &num, cd);
     if (error) {
-        VN_RELE(vp);	/* Get rid of extra hold on error */
+        ATRIA_VN_RELE(vp, cd);	/* Get rid of extra hold on error */
     }
     /* Check for slot out of range */
     if (!error && !MFS_VIDINRANGE(num)) {	
-        (void) mfs_ramdir_remove(dvp, nm, &xvp);
-        VN_RELE(vp);	/* Get rid of extra hold when remove */
+        (void) mfs_ramdir_remove(dvp, nm, &xvp, cd);
+        ATRIA_VN_RELE(vp, cd);	/* Get rid of extra hold when remove */
         error = ENOSPC;
     }
     if (!error) {
@@ -311,14 +322,15 @@ mvfs_ramdir_insert(
  */
     
 int
-mfs_viewdirmkdir(dvp, nm, vap, vpp, cred, hostnm, is_windows_view)
-VNODE_T *dvp;
-char *nm;
-VATTR_T *vap;	/* May be NULL from mfs_viewdirhmview() */
-VNODE_T **vpp;
-CRED_T *cred;
-char *hostnm;
-tbs_boolean_t is_windows_view;
+mfs_viewdirmkdir(
+    VNODE_T *dvp,
+    char *nm,
+    VATTR_T *vap,	/* May be NULL from mfs_viewdirhmview() */
+    VNODE_T **vpp,
+    CALL_DATA_T *cd,
+    char *hostnm,
+    tbs_boolean_t is_windows_view
+)
 {
     mfs_mnode_t *mnp;
     int error;
@@ -335,7 +347,7 @@ tbs_boolean_t is_windows_view;
     /* Create a view vnode. No info required. */
 
     error = mfs_makespecnode(kind, (VNODE_T *)NULL,
-	NULL, dvp->v_vfsp, vpp);
+        NULL, dvp->v_vfsp, vpp, cd);
 
     /* Fill in the ramdir if we got our new vnode. */
 
@@ -360,11 +372,11 @@ tbs_boolean_t is_windows_view;
         mnp->mn_view.viewname = PN_STRDUP(nm);      /* View tag name copy */
         mnp->mn_view.usedtime = MDKI_CTIME();
         mnp->mn_view.ctime.tv_sec = MDKI_CTIME();
-        MVFS_COPY_UID_TO_VIEW(mnp, cred, &error);
+        MVFS_COPY_UID_TO_VIEW(mnp, MVFS_CD2CRED(cd), &error);
         if (error)  {
             MUNLOCK(mnp);
         } else {
-            MVFS_COPY_GID_TO_VIEW(mnp, cred, &error);
+            MVFS_COPY_GID_TO_VIEW(mnp, MVFS_CD2CRED(cd), &error);
             if (error) { 
                 MUNLOCK(mnp);
             } else {
@@ -377,11 +389,11 @@ tbs_boolean_t is_windows_view;
                 }
                 MUNLOCK(mnp);
 
-                error = mvfs_ramdir_insert(dvp, nm, *vpp);
+                error = mvfs_ramdir_insert(dvp, nm, *vpp, cd);
             }
         }
         if (error) {
-            VN_RELE(*vpp);	/* Release created vnode */
+            ATRIA_VN_RELE(*vpp, cd);	/* Release created vnode */
             *vpp = NULL;
         }
     }
@@ -393,10 +405,11 @@ tbs_boolean_t is_windows_view;
  */
 
 int
-mfs_viewdirrmdir(dvp, nm, cred)
-VNODE_T *dvp;
-char *nm;
-CRED_T *cred;
+mfs_viewdirrmdir(
+    VNODE_T *dvp,
+    char *nm,
+    CALL_DATA_T *cd
+)
 {
     mfs_mnode_t *mnp;
     VNODE_T *vp;
@@ -422,7 +435,7 @@ CRED_T *cred;
     }
     /* Now remove the name and get the vnode back */
 
-    error = mfs_ramdir_remove(dvp, nm, &vp);
+    error = mfs_ramdir_remove(dvp, nm, &vp, cd);
     if (error) return(error);
 
     (void) mvfs_viewdirunexport(dvp, vp);
@@ -432,12 +445,12 @@ CRED_T *cred;
        /view dir. */
 
     ASSERT(MFS_ISVIEW(VTOM(vp)));
-    mfs_mnflushvw(vp);		/* Flush mnodes with this view */
+    mfs_mnflushvw(vp, cd);		/* Flush mnodes with this view */
 
     MLOCK(VTOM(vp));
     VTOM(vp)->mn_view.id = MFS_NULLVID;	
     MUNLOCK(VTOM(vp));
-    VN_RELE(vp);   /* Release vnode */
+    ATRIA_VN_RELE(vp, cd);   /* Release vnode */
 
     /* 
      * If the name was a non-hm name, make sure the HM form of
@@ -445,7 +458,7 @@ CRED_T *cred;
      */
 
     if (hmnm != NULL) {
-        error = mfs_ramdir_remove(dvp, hmnm, &vp);
+        error = mfs_ramdir_remove(dvp, hmnm, &vp, cd);
 	STRFREE(hmnm);
         if (error) {
 	    if (error == ENOENT) error = 0;
@@ -457,11 +470,11 @@ CRED_T *cred;
            /view dir. */
 
         ASSERT(MFS_ISVIEW(VTOM(vp)));
-        mfs_mnflushvw(vp);		/* Flush mnodes with this view */
+        mfs_mnflushvw(vp, cd);		/* Flush mnodes with this view */
         MLOCK(VTOM(vp));
         VTOM(vp)->mn_view.id = MFS_NULLVID;	
         MUNLOCK(VTOM(vp));
-        VN_RELE(vp);   /* Release vnode */
+        ATRIA_VN_RELE(vp, cd);   /* Release vnode */
     }
 	
     return(0);
@@ -659,13 +672,14 @@ CRED_T *cred;
 /* MFS_VIEWDIRLOOKUP - lookup a name in a the viewdir */
 
 int 
-mfs_viewdirlookup(dvp, nm, vpp, cred, pnp, flag)
-VNODE_T *dvp;
-char *nm;
-VNODE_T **vpp;
-CRED_T *cred;
-struct pathname *pnp;
-int flag;
+mfs_viewdirlookup(
+    VNODE_T *dvp,
+    char *nm,
+    VNODE_T **vpp,
+    CALL_DATA_T *cd,
+    struct pathname *pnp,
+    int flag
+)
 {
     register mfs_mnode_t *mnp;
     int vnum;
@@ -689,19 +703,19 @@ int flag;
 	if (mnp->mn_ramdir.ents[vnum].nm == NULL) continue;
 	if (PN_STRCMP(MVFS_PN_CI_LOOKUP(pnp),
                       mnp->mn_ramdir.ents[vnum].nm, snm) == 0) {
-	    /* History mode name, find/create hm view from this view */
-	    if (hm) {
-    		STRFREE(snm);	/* Don't need string anymore */
-	  	vw = mnp->mn_ramdir.ents[vnum].vp;
-		/* Must be a view - nothing else */
-		if (!MFS_VPISMFS(vw) || !MFS_ISVIEW(VTOM(vw))) {
-		    MUNLOCK(mnp);
-		    return(ENOENT);
-		}
-		VN_HOLD(vw);
-		MUNLOCK(mnp);
-        	error = mfs_viewdirhmview(vw, vpp, cred);
-		VN_RELE(vw);		/* Done with view */
+            /* History mode name, find/create hm view from this view */
+            if (hm) {
+                STRFREE(snm);	/* Don't need string anymore */
+                vw = mnp->mn_ramdir.ents[vnum].vp;
+                /* Must be a view - nothing else */
+                if (!MFS_VPISMFS(vw) || !MFS_ISVIEW(VTOM(vw))) {
+                    MUNLOCK(mnp);
+                    return(ENOENT);
+                }
+                VN_HOLD(vw);
+                MUNLOCK(mnp);
+                error = mfs_viewdirhmview(vw, vpp, cd);
+                ATRIA_VN_RELE(vw, cd);		/* Done with view */
                 /* 
                  * For case-insensitive lookup must set
                  * case-correct name in pnp from final vnode
@@ -754,10 +768,11 @@ int flag;
  */
 
 int
-mfs_viewtaglookup(nm, vpp, cred)
-mfs_pn_char_t *nm;
-VNODE_T **vpp;
-CRED_T *cred;
+mfs_viewtaglookup(
+    mfs_pn_char_t *nm,
+    VNODE_T **vpp,
+    CALL_DATA_T *cd
+)
 {
     int error;
     VNODE_T *vp;
@@ -766,25 +781,25 @@ CRED_T *cred;
     dvp = mfs_getviewroot();
     if (!dvp) return(ENOENT);	/* Not found */
 
-    error = mfs_viewdirlookup(dvp, nm, &vp, cred, (struct pathname *)NULL, 0);
-    VN_RELE(dvp);
+    error = mfs_viewdirlookup(dvp, nm, &vp, cd, (struct pathname *)NULL, 0);
+    ATRIA_VN_RELE(dvp, cd);
 
     /* Make sure we only return view tags from this routine */
 
     if (!error) {
-	if (!MFS_ISVIEW(VTOM(vp))) {
-	    VN_RELE(vp);
-	    vp = NULL;
-	    error = EINVAL;		/* So not get enoent on valid item */
-	} else {
-	    if (vpp) {
-	        *vpp = vp;		/* Return vnode ptr (held) */
-	    } else {
-		VN_RELE(vp);		/* Release unwanted vnode ptr */
-	    }
-	}
+        if (!MFS_ISVIEW(VTOM(vp))) {
+            ATRIA_VN_RELE(vp, cd);
+            vp = NULL;
+            error = EINVAL;		/* So not get enoent on valid item */
+        } else {
+            if (vpp) {
+                *vpp = vp;		/* Return vnode ptr (held) */
+            } else {
+                ATRIA_VN_RELE(vp, cd);		/* Release unwanted vnode ptr */
+            }
+        }
     } else {
-	if (vpp) *vpp = NULL;		/* If return vnode ptr, make sure NULL */
+        if (vpp) *vpp = NULL;		/* If return vnode ptr, make sure NULL */
     }
 
     return(error);
@@ -919,10 +934,11 @@ mvfs_viewdirreaddir(
  */
 
 int
-mfs_viewdirhmview(vw, vpp, cred)
-VNODE_T *vw;
-VNODE_T **vpp;
-CRED_T *cred;
+mfs_viewdirhmview(
+    VNODE_T *vw,
+    VNODE_T **vpp,
+    CALL_DATA_T *cd
+)
 {
     VNODE_T *vdir;
     register mfs_mnode_t *viewrootmnp, *vwmnp, *hmmnp;
@@ -977,19 +993,19 @@ CRED_T *cred;
      */
     if ((vnum == 0) || (viewrootmnp->mn_ramdir.ents[vnum].nm == NULL)) {
         MUNLOCK(vwmnp);
-	MUNLOCK(viewrootmnp);
-	VN_RELE(vdir);
-	mvfs_log(MFS_LOG_ESTALE, "hmview: stale vw=%s\n", mfs_vw2nm(vw));
-	return(ESTALE);
+        MUNLOCK(viewrootmnp);
+        ATRIA_VN_RELE(vdir, cd);
+        mvfs_log(MFS_LOG_ESTALE, "hmview: stale vw=%s\n", mfs_vw2nm(vw));
+        return(ESTALE);
     }
 
     hmnm = mfs_hmappend(VTOM(vdir)->mn_ramdir.ents[vnum].nm);
     MUNLOCK(vwmnp);                     /* drop lock on view */
     if (hmnm == NULL) { /* Could not get memory for new name */
-	MUNLOCK(viewrootmnp);
-	VN_RELE(vdir);
-	mvfs_log(MFS_LOG_ERR, "hmview: no memory for hm viewname\n");
-	return(ENOMEM);
+        MUNLOCK(viewrootmnp);
+        ATRIA_VN_RELE(vdir, cd);
+        mvfs_log(MFS_LOG_ERR, "hmview: no memory for hm viewname\n");
+        return(ENOMEM);
     }
 
     for (vnum=0; vnum < viewrootmnp->mn_ramdir.hwm; vnum++) {
@@ -1000,19 +1016,19 @@ CRED_T *cred;
 
 	    /* Release locks, dir, storage */
 
-	    *vpp = hmvw;
-	    VN_HOLD(hmvw);
-	    MUNLOCK(viewrootmnp);
-	    VN_RELE(vdir);
-	    STRFREE(hmnm);
+            *vpp = hmvw;
+            VN_HOLD(hmvw);
+            MUNLOCK(viewrootmnp);
+            ATRIA_VN_RELE(vdir, cd);
+            STRFREE(hmnm);
 
-	    /* Go update the hmview with the latest svr info
-	     * from the "master" view
-	     */
+            /* Go update the hmview with the latest svr info
+             * from the "master" view
+             */
 
-	    goto update_hmview;
-	}
-	    
+            goto update_hmview;
+        }
+            
     }
 
     /*
@@ -1020,8 +1036,10 @@ CRED_T *cred;
      */
 
     MUNLOCK(viewrootmnp);	/* Unlock for mkdir */
-    error = mfs_viewdirmkdir(vdir, hmnm, NULL, &hmvw, cred, vwmnp->mn_view.svr.host, vwmnp->mn_view.windows_view);
-    VN_RELE(vdir);	/* Done with view root dir */
+    error = mfs_viewdirmkdir(vdir, hmnm, NULL, &hmvw, cd,
+                             vwmnp->mn_view.svr.host,
+                             vwmnp->mn_view.windows_view);
+    ATRIA_VN_RELE(vdir, cd);	/* Done with view root dir */
     STRFREE(hmnm);	/* Done with history mode name */
     if (error) return(error);
 
@@ -1058,9 +1076,9 @@ update_hmview:
      * the credentials to UNIX or NT depending upon view type (based
      * on view info we just set up above).
      */
-    MVFS_COPY_UID_TO_VIEW(hmmnp, MVFS_VIEW_CREDS(hmvw, cred, TRUE), &error);
+    MVFS_COPY_UID_TO_VIEW(hmmnp, MVFS_VIEW_CREDS(hmvw, MVFS_CD2CRED(cd), TRUE), &error);
     if (error == 0) {
-        MVFS_COPY_GID_TO_VIEW(hmmnp, MVFS_VIEW_CREDS(hmvw, cred, TRUE), &error);
+        MVFS_COPY_GID_TO_VIEW(hmmnp, MVFS_VIEW_CREDS(hmvw, MVFS_CD2CRED(cd), TRUE), &error);
         if (error != 0)
             mvfs_log(MFS_LOG_DEBUG, "hmview: error %d updating GID in vw=%s\n",
                                   error, mfs_vw2nm(hmvw));
@@ -1072,7 +1090,7 @@ update_hmview:
     MUNLOCK(vwmnp);
     MUNLOCK(hmmnp);
     if (error != 0) {
-       VN_RELE(hmvw);
+       ATRIA_VN_RELE(hmvw, cd);
        *vpp = NULL;
        return(error);
     }
@@ -1086,8 +1104,10 @@ update_hmview:
  */
 
 void
-mfs_viewdircleanhm(dvp)
-VNODE_T *dvp;
+mfs_viewdircleanhm(
+    VNODE_T *dvp,
+    CALL_DATA_T *cd
+)
 {
     register mfs_mnode_t *mnp;
     register int vnum;
@@ -1101,39 +1121,39 @@ VNODE_T *dvp;
     for (vnum=0; vnum < mnp->mn_ramdir.hwm; vnum++) {
 	vw = mnp->mn_ramdir.ents[vnum].vp;
 
-	/* XXX Checking VTOM(vw) for NULL to be sure we don't panic
-	 * accessing a NULL mnode, this shouldn't happen but has been seen
-	 * in practice.  This will help prevent panics until we understand the
-	 * root cause of the problem.  See ESC RATLC01024800. */
-	if ((vw == NULL) || (VTOM(vw) == NULL)) continue;
-	if (MFS_VPISMFS(vw) && 
-            		MFS_ISVIEW(VTOM(vw)) &&
-	    		VTOM(vw)->mn_view.hm &&
-	    		(VTOM(vw)->mn_view.usedtime+mvfs_idleview_timeout
-							< MDKI_CTIME())) {
-	    mfs_mnflushvw(vw);	    	/* Flushed cached mnodes for refcnt */
-	    if (V_COUNT(vw) == 1) {	/* No users, remove */
-		ASSERT(mnp->mn_ramdir.ents[vnum].nm);
-	        STRFREE(mnp->mn_ramdir.ents[vnum].nm);
-		if (MVFS_ISVTYPE(vw, VDIR))
-		    mnp->mn_ramdir.lnk_cnt--;
-	        mnp->mn_ramdir.ents[vnum].nm = NULL;
-	        mnp->mn_ramdir.ents[vnum].vp = NULL;
-		VN_RELE(vw);
+        /* XXX Checking VTOM(vw) for NULL to be sure we don't panic
+         * accessing a NULL mnode, this shouldn't happen but has been seen
+         * in practice.  This will help prevent panics until we understand the
+         * root cause of the problem.  See ESC RATLC01024800. */
+        if ((vw == NULL) || (VTOM(vw) == NULL)) continue;
+        if (MFS_VPISMFS(vw) && 
+                        MFS_ISVIEW(VTOM(vw)) &&
+                        VTOM(vw)->mn_view.hm &&
+                        (VTOM(vw)->mn_view.usedtime+mvfs_idleview_timeout
+                                                        < MDKI_CTIME())) {
+            mfs_mnflushvw(vw, cd);	    	/* Flushed cached mnodes for refcnt */
+            if (V_COUNT(vw) == 1) {	/* No users, remove */
+                ASSERT(mnp->mn_ramdir.ents[vnum].nm);
+                STRFREE(mnp->mn_ramdir.ents[vnum].nm);
+                if (MVFS_ISVTYPE(vw, VDIR))
+                    mnp->mn_ramdir.lnk_cnt--;
+                mnp->mn_ramdir.ents[vnum].nm = NULL;
+                mnp->mn_ramdir.ents[vnum].vp = NULL;
+                ATRIA_VN_RELE(vw, cd);
 
-		/* Update dir mod time */
+                /* Update dir mod time */
 
-		mnp->mn_ramdir.mtime.tv_sec = MDKI_CTIME();
-		
-		/* Update high water mark if releasing highest slot */
+                mnp->mn_ramdir.mtime.tv_sec = MDKI_CTIME();
+                
+                /* Update high water mark if releasing highest slot */
 
-		if (vnum == mnp->mn_ramdir.hwm-1) {
-		    for (hwm = vnum-1; (mnp->mn_ramdir.ents[hwm].nm == NULL)
-				&& (hwm >= 0); hwm--) {}
-		    mnp->mn_ramdir.hwm = hwm+1;
-		}
-	    } else {
-		/* Update "used time" so we don't constantly try to
+                if (vnum == mnp->mn_ramdir.hwm-1) {
+                    for (hwm = vnum-1; (mnp->mn_ramdir.ents[hwm].nm == NULL)
+                                && (hwm >= 0); hwm--) {}
+                    mnp->mn_ramdir.hwm = hwm+1;
+                }
+            } else {
+                /* Update "used time" so we don't constantly try to
                    get rid of a HM view the user is still using */
 		VTOM(vw)->mn_view.usedtime = MDKI_CTIME();
 	    }
@@ -1152,7 +1172,7 @@ VNODE_T *dvp;
  */
 
 void
-mfs_viewdirflushrvc()
+mfs_viewdirflushrvc(CALL_DATA_T *cd)
 {
     VNODE_T *dvp;
     register mfs_mnode_t *mnp;
@@ -1181,7 +1201,7 @@ mfs_viewdirflushrvc()
     }
 
     MUNLOCK(mnp);
-    VN_RELE(dvp);
+    ATRIA_VN_RELE(dvp, cd);
     return;
 }
 
@@ -1190,8 +1210,10 @@ mfs_viewdirflushrvc()
 	    if ((mnp)->mn_view.vobstamp_next == MVFS_NUM_VOB_STAMPS) \
 		(mnp)->mn_view.vobstamp_next = 0
 
-STATIC int mvfs_viewdir_find_vobstamp_subr(P1(struct mfs_mnode *mnp)
-					   PN(tbs_uuid_t *uuid));
+STATIC int mvfs_viewdir_find_vobstamp_subr(
+    struct mfs_mnode *mnp,
+    tbs_uuid_t *uuid
+);
 
 STATIC int
 mvfs_viewdir_find_vobstamp_subr(mnp, uuid)
@@ -1334,7 +1356,7 @@ mvfs_viewuuidrecover(
     mfs_strbufpn_pair_t *lpn,
     char *rpn,
     VNODE_T **vwpp,
-    CRED_T *cred
+    CALL_DATA_T *cd
 )
 {
     mfs_mnode_t *mnp;
@@ -1367,7 +1389,7 @@ mvfs_viewuuidrecover(
             PN_STRCMP(FALSE, nm, mnp->mn_view.viewname) == 0)
         {
             ASSERT(mnp->mn_hdr.vfsp != NULL);
-            error = MVFS_VNGET(mnp->mn_hdr.vfsp, NULL, mnp, vwpp);
+            error = MVFS_VNGET(mnp->mn_hdr.vfsp, NULL, mnp, vwpp, cd);
             /*
              * MFS_VNGET gets a ref cnt on vnode (if no error).  It
              * always drops the lock on the mnode and consumes a
@@ -1390,13 +1412,13 @@ mvfs_viewuuidrecover(
                          mnp->mn_view.viewname, *vwpp);
 #endif
                 /* everything checks out */
-                error = mvfs_ramdir_insert(dvp, nm, *vwpp);
+                error = mvfs_ramdir_insert(dvp, nm, *vwpp, cd);
                 if (error) {
                     /*
                      * Oops, something went wrong.  Give up the
                      * search & return
                      */
-                    VN_RELE(*vwpp); /* drop hold from VNGET */
+                    ATRIA_VN_RELE(*vwpp, cd); /* drop hold from VNGET */
                     *vwpp = NULL;
                 } 
                 /*
@@ -1411,10 +1433,10 @@ mvfs_viewuuidrecover(
         } else {
             /* wrong view, release mnode and keep searching */
             MUNLOCK(mnp);
-            mfs_mnrele(mnp);
+            mfs_mnrele(mnp, cd);
         }
     }
-    VN_RELE(dvp);
+    ATRIA_VN_RELE(dvp, cd);
     return error;
 }
-static const char vnode_verid_mvfs_vwdirops_c[] = "$Id:  e3bce542.37d311e1.8ef1.00:01:84:c3:8b:ce $";
+static const char vnode_verid_mvfs_vwdirops_c[] = "$Id:  a5969893.e27746ed.99e5.41:b8:e7:95:c5:82 $";

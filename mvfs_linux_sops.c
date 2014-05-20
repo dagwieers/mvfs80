@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 1999, 2012 IBM Corporation.
+ * Copyright (C) 1999, 2013 IBM Corporation.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -214,14 +214,14 @@ void
 vnlayer_put_super(struct super_block *super_p)
 {
     int err;
-    CRED_T *cred;
+    CALL_DATA_T cd;
 
     ASSERT_KERNEL_LOCKED();
     ASSERT_SB_LOCKED(super_p);
 
-    cred = MDKI_GET_UCRED();
-    err = VFS_UNMOUNT(SBTOVFS(super_p), cred);
-    MDKI_CRFREE(cred);
+    mdki_linux_init_call_data(&cd);
+    err = VFS_UNMOUNT(SBTOVFS(super_p), &cd);
+    mdki_linux_destroy_call_data(&cd);
 
     if (err != 0) {
         VFS_LOG(SBTOVFS(super_p), VFS_LOG_ERR,
@@ -233,14 +233,14 @@ vnlayer_put_super(struct super_block *super_p)
 void
 vnlayer_write_super(struct super_block *super_p)
 {
-    CRED_T *cred;
+    CALL_DATA_T cd;
     int err;
 
     ASSERT_SB_LOCKED(super_p);
 
-    cred = MDKI_GET_UCRED();
-    err = VFS_SYNC(SBTOVFS(super_p), SBTOVFS(super_p), 0, cred);
-    MDKI_CRFREE(cred);
+    mdki_linux_init_call_data(&cd);
+    err = VFS_SYNC(SBTOVFS(super_p), SBTOVFS(super_p), 0, &cd);
+    mdki_linux_destroy_call_data(&cd);
     /* They rewrote sync_supers so that it won't proceed through their loop
      * until the dirty bit is cleared.
      */
@@ -434,16 +434,16 @@ vnlayer_linux_mount(
 )
 {
     int err;
-    CRED_T *cred;
+    CALL_DATA_T cd;
     MVFS_CALLER_INFO_STRUCT ctx;
 
-    cred = MDKI_GET_UCRED();
+    mdki_linux_init_call_data(&cd);
     BZERO(&ctx, sizeof(ctx));
     /* VFS_MOUNT method must detect 32- or 64-bit caller, if necessary */
     err = VFS_MOUNT(vfsp, NULL, NULL, vfsp->vfs_flag,
-                          data_p, 0, cred, &ctx);
+                          data_p, 0, &cd, &ctx);
     err = mdki_errno_unix_to_linux(err);
-    MDKI_CRFREE(cred);
+    mdki_linux_destroy_call_data(&cd);
     return(err);
 
 }
@@ -533,7 +533,7 @@ vnlayer_fill_super(
     err = VFS_ROOT(SBTOVFS(super_p), &rootvp);
     if (err) {
         err = mdki_errno_unix_to_linux(err);
-        (void) VFS_UNMOUNT(vfsp, MVFS_CD2CRED(&cd));
+        (void) VFS_UNMOUNT(vfsp,&cd);
         mdki_linux_destroy_call_data(&cd);
         goto bailout;
     }
@@ -584,7 +584,7 @@ vnlayer_fill_super(
         igrab(ino_p);
     } else {
         VN_RELE(rootvp);
-        (void) VFS_UNMOUNT(vfsp, MVFS_CD2CRED(&cd));
+        (void) VFS_UNMOUNT(vfsp,&cd);
         mdki_linux_destroy_call_data(&cd);
         err = -ENOMEM;
         goto bailout;
@@ -1263,7 +1263,7 @@ vnlayer_find_dentry(VNODE_T *vp)
      * only if we don't find a suitable one for this inode.
      * d_alloc is here because before 2.6.38 it acquires dcache_lock.
      */
-#if LINUX_VERSION_CODE < KERNEL_VERSION(3,2,0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,0,0)
     dnew = d_alloc(NULL, &this_is_anon);
 #else
     dnew = d_alloc_pseudo(ip->i_sb, &this_is_anon);
@@ -1328,4 +1328,4 @@ vnlayer_find_dentry(VNODE_T *vp)
     return dp;
 }
 
-static const char vnode_verid_mvfs_linux_sops_c[] = "$Id:  f2bbff2c.f14411e1.9c93.00:01:84:c3:8a:52 $";
+static const char vnode_verid_mvfs_linux_sops_c[] = "$Id:  53e60141.c9e445dd.a756.0b:df:b8:f2:a2:29 $";

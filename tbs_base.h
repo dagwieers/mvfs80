@@ -81,6 +81,7 @@ typedef char tbs_shell_cmd_t[TBS_MAX_SHELL_CMD_LEN+1];
 #define TBS_MAX_NAME_LEN   	KS_MAX_NAME_LEN
 typedef ks_name_t tbs_name_t;
 #define TBS_MAX_PNAME_LEN	KS_MAX_PNAME_LEN
+#define TBS_MAX_PNAME_FMT KS_MAX_PNAME_FMT
 typedef ks_pname_t tbs_pname_t;
 
 /****************************************************************************
@@ -716,4 +717,4 @@ typedef struct tbs_dirent_s {
 
 
 #endif
-/* $Id: 3047450d.569111e2.8db0.00:01:83:9c:f6:11 $ */
+/* $Id: 2de58b4a.cabc45a7.8ea5.b9:33:d1:02:fc:d7 $ */

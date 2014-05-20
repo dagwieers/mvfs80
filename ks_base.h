@@ -462,6 +462,7 @@ typedef ks_int64_t ks_off64_t;
 typedef KS_CHAR ks_name_t[KS_MAX_NAME_LEN+1];
 
 #define KS_MAX_PNAME_LEN 1023
+#define KS_MAX_PNAME_FMT "%1023s"
 #if !defined(RPC) || defined(RPC_HDR)
 typedef KS_CHAR ks_pname_t[KS_MAX_PNAME_LEN+1];
 typedef KS_CHAR ks_canon_pname_t[KS_MAX_PNAME_LEN+1];
@@ -608,6 +609,7 @@ typedef struct credutl_sid_s {
                                       sizeof(sid_p->type))
 
 #define CREDUTL_MAX_SID_STR 100
+#define CREDUTL_MAX_SID_FMT "%100s"
 
 typedef char credutl_sid_str_t[CREDUTL_MAX_SID_STR + 1];
 
@@ -653,4 +655,4 @@ typedef enum ks_addrfamily {
 #define KS_NUM_ADDRESS_FAMILIES 2
 
 #endif /* _KS_BASE_H_ */
-/* $Id: 7694d7ed.8daf11e2.8082.00:01:83:9c:f6:11 $ */
+/* $Id: f9b9e74a.f43f4951.ad7c.9f:51:40:0d:f2:b9 $ */

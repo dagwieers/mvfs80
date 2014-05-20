@@ -1,4 +1,4 @@
-/* * (C) Copyright IBM Corporation 1999, 2012. */
+/* * (C) Copyright IBM Corporation 1999, 2013. */
 /*
  This program is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License as published by
@@ -237,22 +237,27 @@ mvfs_linux_vfsp_to_fsid(VFS_T *vfsp);
 }
 #define MVFS_FINISHVFS(vfsp)            /* nothing */
 
-#define MVFS_STATFS(vfsp, cvn, statb) mdki_linux_statvfs_vnode(cvn, statb)
+#define MVFS_STATFS(vfsp, cvn, statb, cd) mdki_linux_statvfs_vnode(cvn, statb)
 
 #define MVFS_GETVTYPE(vp)  ((vp)->v_type)
 #define MVFS_ISVTYPE(vp, type) (MVFS_GETVTYPE(vp) == (type))
 
 #define VTOM(vp)	((struct mfs_mnode *)((vp)->v_data))
 
-#define MVFS_VNGET(mnvfsp, lovfsp, mnp, vpp) \
-	mvfs_linux_vnget(mnvfsp, lovfsp, mnp, vpp)
+#define MVFS_VNGET(mnvfsp, lovfsp, mnp, vpp, cd) \
+	mvfs_linux_vnget(mnvfsp, lovfsp, mnp, vpp, cd, TRUE)
+#define MVFS_VNGET_NOWAIT(mnvfsp, lovfsp, mnp, vpp, cd) \
+	mvfs_linux_vnget(mnvfsp, lovfsp, mnp, vpp, cd, FALSE)
+
 struct mfs_mnode;                       /* forward decl */
 extern int
 mvfs_linux_vnget(
     VFS_T *mnvfsp,
     VFS_T *lovfsp,
     struct mfs_mnode *mnp,
-    VNODE_T **vpp
+    VNODE_T **vpp,
+    CALL_DATA_T *cd,
+    mdki_boolean_t wait
 );
 
 #define MFS_VPISMFS(vp) mdki_vpismfs(vp)
@@ -274,18 +279,21 @@ mvfs_linux_vnget(
  * not available to all of our callers.
  */
 #define MVOP_ACCESS VOP_ACCESS
-#define MVOP_GETATTR(VP,CVP,VAP,F,CR)	mvop_linux_getattr(VP,VAP,F,CR)
+#define MVOP_GETATTR(VP,CVP,VAP,F,CD) \
+    mvop_linux_getattr(VP,VAP,F,MVFS_CD2CRED(CD))
 #define MVOP_SETATTR(VP,VAP,F,CR,CTXP)	VOP_SETATTR(VP,VAP,F,CR)
 #define MVOP_READDIR VOP_READDIR
 #define MVOP_OPEN VOP_OPEN
-#define MVOP_CLOSE mvop_linux_close
+#define MVOP_CLOSE(VP,F,CNT,OFF,CD,CTX) \
+    mvop_linux_close(VP,F,CNT,OFF,MVFS_CD2CRED(CD),CTX)
 #define MVOP_READ VOP_READ
 #define MVOP_WRITE VOP_WRITE
 #define MVOP_IOCTL VOP_IOCTL
 #define MVOP_MMAP VOP_MMAP
 #define MVOP_PRINT VOP_PRINT
 
-#define MVOP_CREATE(DVP,P,VAP,EX,MODE,VPP,CR,FL,DENTRY) VOP_CREATE(DVP, P, VAP, EX, MODE, VPP, CR, DENTRY)
+#define MVOP_CREATE(DVP,P,VAP,EX,MODE,VPP,CR,FL,DENTRY) \
+    VOP_CREATE(DVP, P, VAP, EX, MODE, VPP, CR, DENTRY)
 #define MVOP_REMOVE VOP_REMOVE
 #define MVOP_LINK VOP_LINK
 #define MVOP_RENAME VOP_RENAME
@@ -295,7 +303,8 @@ mvfs_linux_vnget(
 #define MVOP_READLINK(VP,UIOP,CR)       (ENOSYS)
 #define MVOP_SEEK VOP_SEEK
 #define MVOP_FSYNC VOP_FSYNC
-#define MVOP_FSYNC_KERNEL(VP, F, CR, FP) mvop_linux_fsync_kernel(VP, F, CR, FP)
+#define MVOP_FSYNC_KERNEL(VP, F, CD, FP) \
+    mvop_linux_fsync_kernel(VP, F, MVFS_CD2CRED(CD), FP)
 #define MVOP_LOCKCTL VOP_LOCKCTL
 /* MVOP_INACTIVE not used */
 /* MVOP_FID not used */
@@ -309,19 +318,23 @@ mvfs_linux_vnget(
  */
 #define MVFS_DEL_RENAME_NEEDED(vp,ctx) mdki_linux_rename_needed(vp,ctx)
 
-#define LOOKUP_STORAGE_FILE(ro, pn,dvpp,vpp,cred)                       \
- mvop_linux_lookup_storage_file(pn, vpp, cred)
+#define LOOKUP_STORAGE_FILE(ro, pn,dvpp,vpp,cd)                       \
+ mvop_linux_lookup_storage_file(pn, vpp, MVFS_CD2CRED(cd))
 
 #define CLR_VNODE_T VNODE_T
 #define CVN_HOLD VN_HOLD
-#define CVN_RELE VN_RELE
+#define CVN_RELE(VP, CD) VN_RELE(VP)
 #define CLR_ROOTDIR mvfs_sysroot_cvp
 extern CLR_VNODE_T *mvfs_sysroot_cvp;
 
-#define MVOP_OPEN_KERNEL(CVP,FLAGS,CRED,filp) mvop_linux_open_kernel(CVP,FLAGS,CRED,filp)
-#define MVOP_CLOSE_KERNEL(CVP,FLAGS,COUNT,OFF,CRED,filp) mvop_linux_close_kernel(CVP,FLAGS,COUNT,OFF,CRED,filp,NULL)
-#define MVOP_READ_KERNEL(CVP,UIOP,IOF,VAP,CRED,filp) mvop_linux_read_kernel(UIOP,IOF,CRED,filp)
-#define MVOP_WRITE_KERNEL(CVP,UIOP,IOF,VAP,CRED,filp) mvop_linux_write_kernel(UIOP,IOF,CRED,filp)
+#define MVOP_OPEN_KERNEL(CVP,FLAGS,CD,FILP) \
+    mvop_linux_open_kernel(CVP,FLAGS,MVFS_CD2CRED(CD),FILP)
+#define MVOP_CLOSE_KERNEL(CVP,FLAGS,COUNT,OFF,CD,FILP) \
+    mvop_linux_close_kernel(CVP,FLAGS,COUNT,OFF,MVFS_CD2CRED(CD),FILP,NULL)
+#define MVOP_READ_KERNEL(CVP,UIOP,IOF,VAP,CD,FILP) \
+    mvop_linux_read_kernel(UIOP,IOF,MVFS_CD2CRED(CD),FILP)
+#define MVOP_WRITE_KERNEL(CVP,UIOP,IOF,VAP,CD,FILP) \
+    mvop_linux_write_kernel(UIOP,IOF,MVFS_CD2CRED(CD),FILP)
 
 /*
  * 2.4 generic file reading/writing routines do the locking of the cleartext
@@ -436,7 +449,7 @@ mvfs_linux_sync_size(
 
 #define MVFS_WRAP_SYNC_SIZE(vp, size, actual)   mvfs_linux_sync_size(vp, size, actual)
 #define MVFS_LINUX_UPDATE_ATTRS(vp, fn, line)	mvfs_linux_update_attrs(vp, fn ":" #line )
-#define MVFS_WRAP_UPDATE_ATTRS(vp)	MVFS_LINUX_UPDATE_ATTRS(vp, __FILE__, __LINE__)
+#define MVFS_WRAP_UPDATE_ATTRS(vp, cd)	MVFS_LINUX_UPDATE_ATTRS(vp, __FILE__, __LINE__)
 #define MVFS_WRAP_SET_MODIFIED(vp)      mvfs_linux_set_modified(vp)
 #define MVFS_WRAP_SET_ACCESSED(vp)      mvfs_linux_set_accessed(vp)
 #define MVFS_WRAP_SET_INODE_CHANGED(vp) mvfs_linux_set_ichg(vp)
@@ -500,10 +513,10 @@ mvfs_linux_procvalid(struct mvfs_proc *mprocp);
 #define MDKI_CURPID()	        mdki_curpid()
 #define MDKI_CURPROC()          mdki_curproc()
 #define MDKI_PARENT_PROC(p)     mdki_get_parent(p)
-#define MDKI_MYPROCID(tagp)     *(tagp) = MDKI_CURPID()
+#define MDKI_MYPROCID(tagp, tidp)     *(tagp) = MDKI_CURPID()
 #define MDKI_PROCID(tagp, procp) *(tagp) = mdki_get_proc_pid(procp)
 #define MDKI_PROCID_EQ(a, b)     (*(a) == *(b))
-#define MDKI_MYPROCTAG(tagp, procid) *(tagp) = mdki_get_proctag(MDKI_CURPROC())
+#define MDKI_MYPROCTAG(tagp, procid, threadid) *(tagp) = mdki_get_proctag(MDKI_CURPROC())
 #define MDKI_PROCTAG(tagp, procp) *(tagp) = mdki_get_proctag(procp)
 #define MDKI_PROCTAG_EQ(a,b)    (*(a) == *(b))
 
@@ -520,7 +533,7 @@ mvfs_linux_procvalid(struct mvfs_proc *mprocp);
 #define MDKI_PRISACTIVE(p) mdki_linux_procactive(p)
 #define MDKI_PRPID(p)	mdki_get_proc_pid(p)
 #define MDKI_PRSTATE(p)	(int)mdki_get_proc_state(p)
-#define MVFS_PROCVALID(mprocp)   mvfs_linux_procvalid(mprocp)
+#define MVFS_PROCVALID(mprocp, thrid)   mvfs_linux_procvalid(mprocp)
 
 /* We need to provide our own mvfs_proc_setview routine because we are
  * subtly different, (the root dir field is never NULL.)
@@ -532,7 +545,8 @@ mvfs_linux_proc_setview(
     tbs_status_t *status_p
 );
 
-#define MVFS_SET_PROCVIEW(vw, statusp)    mvfs_linux_proc_setview(vw, statusp)
+#define MVFS_SET_PROCVIEW(vw, statusp, mth) \
+    mvfs_linux_proc_setview(vw, statusp)
 #define MVFS_GET_PROCVIEW() mdki_linux_get_procview()
 
 /* Flag for mfs_getattr. These are bitmasks.  This must not conflict with
@@ -586,7 +600,7 @@ typedef struct mvfs_linux_threadid {
 EXTERN struct mvfs_thread *
 mvfs_linux_enter_fs(void);
 
-#define MVFS_MDEP_ENTER_FS()  mvfs_linux_enter_fs()
+#define MVFS_MDEP_ENTER_FS(thr)  mvfs_linux_enter_fs()
 
 #if defined(MVFS_DEBUG) || defined(STACK_CHECKING)
 /*
@@ -618,8 +632,8 @@ mvfs_linux_should_cover(void);
 #define LOOKUP_FOR_IOCTL(pn,s,f,opt,dvpp,vpp,cd)              \
 	mvfs_linux_lookup_ioctl(pn,s,f,opt,dvpp,vpp,cd)
 
-#define LOOKUP_AUDIT_FILE(pn,vpp,cred)                                  \
-        mvop_linux_lookup_storage_file(pn, vpp, cred)
+#define LOOKUP_AUDIT_FILE(pn,vpp,cd)                                  \
+        mvop_linux_lookup_storage_file(pn, vpp, MVFS_CD2CRED(cd))
 
 extern int 
 mvfs_linux_lookup_ioctl(
@@ -796,8 +810,8 @@ mvfs_linux_condlock(
  * Other functions
  */
 
-#define LOOKUP_COMPONENT(vp, nm, cvpp, pnp, rdir, cr, ctx)    \
-        mvop_linux_lookup_component((vp), (nm), (cvpp), (cr), (ctx))
+#define LOOKUP_COMPONENT(vp, nm, cvpp, pnp, rdir, cd, ctx)    \
+    mvop_linux_lookup_component((vp), (nm), (cvpp), MVFS_CD2CRED(cd), (ctx))
 
 /* Special macros to handle special escapes such as ROOTDIR^ in
  * mfs_lookup.
@@ -875,7 +889,7 @@ mvfs_linux_clnt_get_servaddr(
 extern int
 mvfs_linux_prod_parent_dir_cache(
     struct mfs_mnode *mnp,
-    CRED_T *cred
+    CALL_DATA_T *cd
 );
 
 #define MVFS_PROD_PARENT_DIR_CACHE  mvfs_linux_prod_parent_dir_cache
@@ -966,8 +980,8 @@ mvfs_linux_misc_init(struct mvfs_cache_sizes *sizes);
 extern void
 mvfs_linux_misc_free(void);
 
-#define MVFS_CREATEVP(nm, vap, vpp, cred, flag) \
-	mdki_linux_createvp(nm, vap, vpp, cred, flag)
+#define MVFS_CREATEVP(nm, vap, vpp, cd, flag) \
+	mdki_linux_createvp(nm, vap, vpp, MVFS_CD2CRED(cd), flag)
 
 /*
  * close log file at viewroot-unmount time to avoid problems with
@@ -1090,4 +1104,4 @@ mvfs_linux_ioctl_chk_cmd(
     ((*((volatile typeof(*(addr)) *)(addr))) = (val))
 
 #endif /* MVFS_MDEP_LINUX_H_ */
-/* $Id: 76c28f68.38b711e2.96fc.00:01:84:c3:8a:52 $ */
+/* $Id: 17a7e059.90654cf5.9912.46:3b:00:23:b0:f2 $ */

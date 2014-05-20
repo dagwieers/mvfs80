@@ -65,21 +65,22 @@ mvfs_get_vobinfo(
 STATIC int MVFS_NOINLINE
 mvfs_setprocview(
     mvfscmd_block_t *data,
-    CRED_T *cred,
+    CALL_DATA_T *cd,
     MVFS_CALLER_INFO *callinfo
 );
 
 STATIC int MVFS_NOINLINE
 mvfs_get_procviewinfo(
     mvfscmd_block_t *data, 
-    MVFS_CALLER_INFO *callinfo
+    MVFS_CALLER_INFO *callinfo,
+    CALL_DATA_T *cd
 );
 
 STATIC int MVFS_NOINLINE
 mvfs_get_viewinfo(
     VNODE_T *vp,
     mvfscmd_block_t *data,
-    CRED_T *cred,
+    CALL_DATA_T *cd,
     MVFS_CALLER_INFO *callinfo
 );
 
@@ -120,35 +121,35 @@ STATIC int
 mvfs_mkviewtag(
     mvfscmd_block_t *data,
     mvfs_mkviewtag_info_ex_t *vtp_ex,
-    CRED_T *cred,
+    CALL_DATA_T *cd,
     MVFS_CALLER_INFO *callinfo
 );
 
 STATIC int MVFS_NOINLINE
 mvfs_rmviewtag(
     mvfscmd_block_t *data,
-    CRED_T *cred,
+    CALL_DATA_T *cd,
     MVFS_CALLER_INFO *callinfo
 );
 
 STATIC int MVFS_NOINLINE
 mvfs_exportviewtag(
     mvfscmd_block_t *data,
-    CRED_T *cred,
+    CALL_DATA_T *cd,
     MVFS_CALLER_INFO *callinfo
 );
 
 STATIC int MVFS_NOINLINE
 mvfs_unexportviewtag(
     mvfscmd_block_t *data,
-    CRED_T *cred,
+    CALL_DATA_T *cd,
     MVFS_CALLER_INFO *callinfo
 );
 
 STATIC int MVFS_NOINLINE
 mvfs_get_viewtag_export(
     mvfscmd_block_t *data,
-    CRED_T *cred,
+    CALL_DATA_T *cd,
     MVFS_CALLER_INFO *callinfo
 );
 
@@ -183,7 +184,8 @@ mvfs_get_viewtag_dir(
 STATIC int MVFS_NOINLINE
 mvfs_read_dnc(
     mvfscmd_block_t *data, 
-    MVFS_CALLER_INFO *callinfo
+    MVFS_CALLER_INFO *callinfo,
+    CALL_DATA_T *cd
 );
 
 STATIC int MVFS_NOINLINE
@@ -208,7 +210,7 @@ mvfs_get_stats(
 STATIC int MVFS_NOINLINE
 mvfs_rmallviewtags(
     mvfscmd_block_t *data,
-    CRED_T *cred
+    CALL_DATA_T *cd
 );
 
 STATIC int MVFS_NOINLINE
@@ -229,7 +231,7 @@ mvfs_get_cache_usage(
 STATIC int MVFS_NOINLINE
 mvfs_set_cache_sizes(
     mvfscmd_block_t *data,
-    CRED_T *cred,
+    CALL_DATA_T *cd,
     MVFS_CALLER_INFO *callinfo
 );
 
@@ -248,14 +250,28 @@ mvfs_compute_cache_defaults(
 STATIC int MVFS_NOINLINE
 mvfs_get_view_stats(
      mvfscmd_block_t *data,
-     CRED_T *cred,
+     CALL_DATA_T *cd,
      MVFS_CALLER_INFO *callinfo
+);
+
+STATIC int MVFS_NOINLINE
+mvfs_enable_pview_stat(
+    mvfscmd_block_t *data,
+    CALL_DATA_T *cd,
+    MVFS_CALLER_INFO *callinfo
+);
+
+STATIC int MVFS_NOINLINE
+mvfs_disable_pview_stat(
+    mvfscmd_block_t *data,
+    CALL_DATA_T *cd,
+    MVFS_CALLER_INFO *callinfo
 );
 
 STATIC int MVFS_NOINLINE
 mvfs_zero_view_stats(
     mvfscmd_block_t *data,
-    CRED_T *cred,
+    CALL_DATA_T *cd,
     MVFS_CALLER_INFO *callinfo
 );
 
@@ -413,7 +429,6 @@ mvfs_ioctl_lookup(
     MVFS_CALLER_INFO *callinfo
 )
 {
-
     int error = 0;
     CLR_VNODE_T *cvp;
     VNODE_T *vp;
@@ -426,6 +441,7 @@ mvfs_ioctl_lookup(
     CLR_VNODE_T *rcvp = NULL;   /* Avoid a compiler warning by initializing. */
     int s;
     char *pn;
+    CALL_DATA_T *ncd = NULL;
 
     MFS_CHKSP(STK_LOOKUPNAME);
 
@@ -505,7 +521,7 @@ mvfs_ioctl_lookup(
      * we don't want all this meta-junk in the audit.
      */
  
-    mth = MVFS_MYTHREAD(cd); 
+    mth = MVFS_MYTHREAD(cd);
     MFS_INHAUDIT(mth);
 
     /* Do the name lookup */
@@ -513,7 +529,7 @@ mvfs_ioctl_lookup(
     vp = NULL;
     cvp = NULL;
     error = LOOKUP_FOR_IOCTL(pn, UIO_USERSPACE, lookflag, extra_lookflag, 
-						NULL, &cvp,cd);
+						NULL, &cvp, cd);
     if (error) {
 	ASSERT(cvp == NULL);
 	iocbuf->status = tbs_errno2status(error);
@@ -525,7 +541,7 @@ mvfs_ioctl_lookup(
 	 * got a realvp through the operation, use that instead.
 	 */
 	CVN_HOLD(rcvp);
-	CVN_RELE(cvp);
+	CVN_RELE(cvp, cd);
 	cvp = rcvp;
     }
     vp = MVFS_CVP_TO_VP(cvp);
@@ -537,8 +553,8 @@ mvfs_ioctl_lookup(
 
     if (mfs_obj_only) {
         if (!MFS_VPISMFS(vp)) {
-            VN_RELE(vp);
-            CVN_RELE(cvp);
+            ATRIA_VN_RELE(vp, cd);
+            CVN_RELE(cvp, cd);
 	    vp = NULL;
             cvp = NULL;
 	    iocbuf->status = TBS_ST_NOT_AN_OBJ;
@@ -548,24 +564,31 @@ mvfs_ioctl_lookup(
     }
     if (MFS_VPISMFS(vp)) {
         /* don't return CLR_VNODE_T when returning MVFS node */
-        CVN_RELE(cvp);
+        CVN_RELE(cvp, cd);
         cvp = NULL;
     }
 
+    ncd = MVFS_ALLOC_SUBSTITUTE_CRED(cd, NULL);
+    if (!MVFS_SUBSTITUTE_CRED_IS_VALID(ncd)) {
+        iocbuf->status = tbs_errno2status(ENOMEM);
+        error = -1;
+        goto out;
+    }
     /* 
      * Bind root... except for getvobinfo calls. 
      * These calls work even without a view on the vob root. 
      */
     if (MFS_VPISMFS(vp) && MFS_ISVOBRT(VTOM(vp)) && bindroot) {
-        xvp = mfs_bindroot(vp, MVFS_VIEW_CREDS(vp, cd, FALSE), &error);
-
+        MVFS_CD_SET_CRED(ncd, MVFS_VIEW_CREDS(vp, MVFS_CD2CRED(cd), FALSE));
+        xvp = mfs_bindroot(vp, ncd, &error);
+        MVFS_CD_UNSET_CRED(ncd);
 	/* The looked up vnode is no longer needed.
 	   If bindroot failed, then we need to release the
 	   lookup ref before returning the error.  If bindroot
 	   succeeded, then xvp is a different vnode and
 	   we want that vnode, not the unbound root. */
 
-	VN_RELE(vp);
+	ATRIA_VN_RELE(vp, cd);
 	vp = NULL;
 	if (error == ESRCH) {
             iocbuf->status = TBS_ST_NOT_AN_OBJ;
@@ -596,7 +619,9 @@ out:
      */
 
     if (MFS_VPISMFS(vp) && MFS_ISVOB(VTOM(vp))) {
-	mfs_rebind_vpp(1, &vp, MVFS_VIEW_CREDS(vp, cd, FALSE));
+        MVFS_CD_SET_CRED(ncd, MVFS_VIEW_CREDS(vp, MVFS_CD2CRED(cd), FALSE));
+        mfs_rebind_vpp(1, &vp, ncd);
+        MVFS_CD_UNSET_CRED(ncd);
         ASSERT(MFS_VPISMFS(vp));
     }
     if (vp != NULL) {
@@ -611,6 +636,8 @@ out:
     }
     *cvpp = cvp;
     *vpp = vp;
+    if (ncd)
+        MVFS_FREE_SUBSTITUTE_CRED(ncd);
     return(error);
 }
 
@@ -727,6 +754,8 @@ mvfs_do_inval(
     int error = 0;
     tbs_boolean_t safe;
     VFS_T *vfsp;
+    CALL_DATA_T *ncd;
+    CALL_DATA_T *nxcd = NULL;
 
     /* Now, switch on invalidate type.  Always invalidate
        the view first, then local information.  That way
@@ -734,36 +763,53 @@ mvfs_do_inval(
        from the view (by another process) after the local
        object is invalidated, but before the view processes
        the invalidate request.  */
-
+    ncd = MVFS_ALLOC_SUBSTITUTE_CRED(cd,
+                MVFS_VIEW_CREDS(vp, MVFS_CD2CRED(cd), FALSE));
+    if (!MVFS_SUBSTITUTE_CRED_IS_VALID(ncd)) {
+        error = ENOMEM;
+        goto cleanup;
+    }
+    nxcd = MVFS_ALLOC_SUBSTITUTE_CRED(cd, NULL);
+    if (!MVFS_SUBSTITUTE_CRED_IS_VALID(nxcd)) {
+        error = ENOMEM;
+        goto cleanup;
+    }
     switch (invp->invaltype) {
     case MVFS_INV_NC:
 	error = mfs_copyin_strbufpn(invp->nm, &inv_nm);
 	if (error) break;
 	error = mfs_clnt_inval(vp,VIEW_INVALIDATE_TYPE_NAME,
 			       replica_oid_p, &invp->obj_oid, inv_nm,
-			       MVFS_VIEW_CREDS(vp, cd, FALSE));
+			       ncd);
 	mnum = 0;
         vfsp = NULL;
         safe = FALSE;
 	while ((mnp = mfs_mngetnextoid(&mnum, vp, 
 				       replica_oid_p,
 				       &invp->obj_oid)) != NULL) {
-	    if ((error = MVFS_VNGET(mnp->mn_hdr.vfsp, NULL, mnp, &xvp)) != 0) {
+            /* 
+             * On Linux MVFS_VNGET will return ENOENT if the vnode is in the
+             * process of going away and leave it to the caller to unwind or
+             * wait, as needed.
+             */
+	    if ((error = MVFS_VNGET(mnp->mn_hdr.vfsp, NULL, mnp, &xvp, cd)) != 0) {
 		continue;
 	    }
 
 	    MLOCK(VTOM(xvp));
 	    MFS_ATTRINVAL(xvp);  /* Before DNLC so that rddir cache does not lag */
             /* remove name */
-	    safe = (mfs_dncremove(xvp, inv_nm, MVFS_VIEW_CREDS(xvp, MVFS_CD2CRED(cd), TRUE)) != 0);
+            MVFS_CD_SET_CRED(nxcd, MVFS_VIEW_CREDS(xvp, MVFS_CD2CRED(cd), TRUE));
+	    safe = (mfs_dncremove(xvp, inv_nm, nxcd) != 0);
             /*
              * If we were able to find the entry in the DNC, then
              * the RVC was purged if appropriate and safe == TRUE.
              */
             vfsp = mnp->mn_hdr.vfsp;    /* take copy of last known vfsp */
 	    MUNLOCK(VTOM(xvp));
-	    VN_RELE(xvp);
+	    ATRIA_VN_RELE(xvp, nxcd);
 	    xvp = NULL;
+            MVFS_CD_UNSET_CRED(nxcd);
 	}
 	STRFREE(inv_nm);
         /*
@@ -796,16 +842,14 @@ mvfs_do_inval(
 
     case MVFS_INV_ROLEMAP:
         error = mfs_clnt_inval(vp, VIEW_INVALIDATE_TYPE_ROLEMAP,
-                               replica_oid_p, &invp->obj_oid, NULL,
-                               MVFS_VIEW_CREDS(vp, cd, FALSE));
+                               replica_oid_p, &invp->obj_oid, NULL, ncd);
 
         mvfs_acl_inval_oid(VOB_MTYPE_ROLEMAP, &invp->obj_oid);
         break;
 
     case MVFS_INV_POLICY:
         error = mfs_clnt_inval(vp, VIEW_INVALIDATE_TYPE_POLICY,
-                               replica_oid_p, &invp->obj_oid, NULL,
-                               MVFS_VIEW_CREDS(vp, cd, FALSE));
+                               replica_oid_p, &invp->obj_oid, NULL, ncd);
 
         mvfs_acl_inval_oid(VOB_MTYPE_POLICY, &invp->obj_oid);
         break;
@@ -813,17 +857,24 @@ mvfs_do_inval(
     case MVFS_INV_OBJ:
     case MVFS_INV_ELEM:
 	error = mfs_clnt_inval(vp, VIEW_INVALIDATE_TYPE_OBJ,
-			       replica_oid_p, &invp->obj_oid, NULL,
-			       MVFS_VIEW_CREDS(vp, cd, FALSE));
+			       replica_oid_p, &invp->obj_oid, NULL, ncd);
 	mnum = 0;
         safe = FALSE;
 	while ((mnp = mfs_mngetnextoid(&mnum, vp, 
 				       replica_oid_p,
 				       &invp->obj_oid)) != NULL) {
-	    if ((error = MVFS_VNGET(mnp->mn_hdr.vfsp, NULL, mnp, &xvp)) != 0) {
+            /* 
+             * On Linux MVFS_VNGET will return ENOENT if the vnode is in the
+             * process of going away and leave it to the caller to unwind or
+             * wait, as needed.
+             */
+            if ((error = MVFS_VNGET(mnp->mn_hdr.vfsp, NULL, mnp, 
+                                    &xvp, cd)) != 0) 
+            {
 		continue;
 	    }
 	    MLOCK(VTOM(xvp));
+            MVFS_CD_SET_CRED(nxcd, MVFS_VIEW_CREDS(xvp, MVFS_CD2CRED(cd), TRUE));
 	    MFS_ATTRINVAL(xvp);
 	    if (MVFS_ISVTYPE(xvp,VREG)) {
 		mfs_clear_mark_purge(xvp);
@@ -858,7 +909,8 @@ mvfs_do_inval(
              */
 	    mfs_dnc_invalvp(xvp);
 	    MUNLOCK(VTOM(xvp));
-	    VN_RELE(xvp);
+            ATRIA_VN_RELE(xvp, nxcd);
+            MVFS_CD_UNSET_CRED(nxcd);
 	    xvp = NULL;
 	}
 	/* 
@@ -893,33 +945,40 @@ mvfs_do_inval(
     case MVFS_INV_VIEW:
 	error = mfs_clnt_inval(vp, VIEW_INVALIDATE_TYPE_VIEW,
 			       &TBS_OID_NULL, &TBS_OID_NULL, NULL,
-			       MVFS_VIEW_CREDS(vp, cd, FALSE));
+			       ncd);
 	/* What about active vnodes?  HACK: Just do cdir! */
 	if (MFS_VPISMFS(cdir) && MFS_ISVOB(VTOM(cdir))) {
 	    MFS_ATTRINVAL(cdir);  /* Before DNLC so that rddir cache does not lag */
 	}
         /* mvfs_dnc_invalvw() effects include an rvcflush */
 	mfs_dnc_invalvw(vp);	/* Invalidate name cache for this view */
-	mfs_mnflushvw(vp);	/* Flush cached vnodes for view */
+	mfs_mnflushvw(vp, cd);	/* Flush cached vnodes for view */
 	break;
 
 	/* Invalidate VFS invalidates the whole mount point. */
     case MVFS_INV_VFS:
 	error = mfs_clnt_inval(vp, VIEW_INVALIDATE_TYPE_VOB,
 			       replica_oid_p, &TBS_OID_NULL, NULL,
-			       MVFS_VIEW_CREDS(vp, cd, FALSE));
+			       ncd);
 	/* HACK: invalidate attrs on u_cdir if mfs */
 	if (MFS_VPISMFS(cdir) && MFS_ISVOB(VTOM(cdir))) {
 	    MFS_ATTRINVAL(cdir);  /* Before DNLC so that rddir cache does not lag */
 	}
-	mfs_dncflush();		/* Flush whole name cache */
-	mfs_mnflush();		/* Flush all vnodes */
+	mfs_dncflush(cd);		/* Flush whole name cache */
+	mfs_mnflush(cd);		/* Flush all vnodes */
         /* RVC was flushed as part of flush of name cache */
 	break;
 
     default:
 	error = EINVAL;
 	break;
+    }
+cleanup:
+    if (ncd != NULL) {
+        MVFS_FREE_SUBSTITUTE_CRED(ncd);
+    }
+    if (nxcd != NULL) {
+        MVFS_FREE_SUBSTITUTE_CRED(nxcd);
     }
     return error;
 }
@@ -960,19 +1019,19 @@ mvfs_mioctl(
 
 	/* Set process view */
 	case MVFS_CMD_SETPROCVIEW: {
-            error = mvfs_setprocview(data, MVFS_CD2CRED(cd), callinfo);
+            error = mvfs_setprocview(data, cd, callinfo);
             break;
 	}
 
 	/* Get current process view info */
 
 	case MVFS_CMD_GET_PROCVIEWINFO: {
-            error = mvfs_get_procviewinfo(data, callinfo);
+            error = mvfs_get_procviewinfo(data, callinfo, cd);
             break;
 	}
 
 	case MVFS_CMD_GET_VIEWINFO: {
-            error = mvfs_get_viewinfo(vp, data, MVFS_CD2CRED(cd), callinfo);
+            error = mvfs_get_viewinfo(vp, data, cd, callinfo);
 	    break;
 	}
 
@@ -1059,7 +1118,7 @@ mvfs_mioctl(
             vtp_ex->windows_view = vtp->windows_view;
             vtp_ex->pad = vtp->pad;
 
-            error = mvfs_mkviewtag(data, vtp_ex, MVFS_CD2CRED(cd), callinfo);
+            error = mvfs_mkviewtag(data, vtp_ex, cd, callinfo);
 
           MVFS_CMD_MKVIEWTAG_cleanup:
             if (vtp != NULL) {
@@ -1072,20 +1131,20 @@ mvfs_mioctl(
         }
 
 	case MVFS_CMD_RMVIEWTAG: {
-            error = mvfs_rmviewtag(data, MVFS_CD2CRED(cd), callinfo);
+            error = mvfs_rmviewtag(data, cd, callinfo);
             break;
         }
 
 	case MVFS_CMD_EXPORTVIEWTAG: {
-            error = mvfs_exportviewtag(data, MVFS_CD2CRED(cd), callinfo);
+            error = mvfs_exportviewtag(data, cd, callinfo);
 	    break;
 	}
 	case MVFS_CMD_UNEXPORTVIEWTAG: {
-            error = mvfs_unexportviewtag(data, MVFS_CD2CRED(cd), callinfo);
+            error = mvfs_unexportviewtag(data, cd, callinfo);
 	    break;
 	}
 	case MVFS_CMD_GET_VIEWTAG_EXPORT: {
-            error = mvfs_get_viewtag_export(data, MVFS_CD2CRED(cd), callinfo);
+            error = mvfs_get_viewtag_export(data, cd, callinfo);
 	    break;
 	}
 	case MVFS_CMD_GET_VIEWADDR: {
@@ -1095,13 +1154,21 @@ mvfs_mioctl(
 
         case MVFS_CMD_CHANGE_MTYPE: {
 	    mvfs_iochange_mtype_t change_mtype;
+            CALL_DATA_T * ncd;
 
 	    if ((error = CopyInMvfs_iochange_mtype(data->infop, &change_mtype, callinfo)) != 0)
 	        break;
 
+            ncd = MVFS_ALLOC_SUBSTITUTE_CRED(cd,
+                        MVFS_VIEW_CREDS(vp, MVFS_CD2CRED(cd), FALSE));
+            if (MVFS_SUBSTITUTE_CRED_IS_VALID(ncd)) {
 	    error = mfs_clnt_change_mtype(vp, change_mtype.mtype,
                                      &data->status,  
-                                     MVFS_VIEW_CREDS(vp, cd, FALSE));
+                                     ncd);
+            MVFS_FREE_SUBSTITUTE_CRED(ncd);
+            } else {
+                error = ENOMEM;
+            }
 	    break;
 	}
 
@@ -1200,15 +1267,15 @@ mvfs_mioctl(
 
 	    /* Allow anyone to flush caches (they can already via
                other invalidate calls */
-	    if (*ulp & MVFS_CF_MN) mfs_mnflush();
-	    if (*ulp & MVFS_CF_NC) mfs_dncflush();
-	    if (*ulp & MVFS_CF_RVC) mfs_viewdirflushrvc();
+	    if (*ulp & MVFS_CF_MN) mfs_mnflush(cd);
+	    if (*ulp & MVFS_CF_NC) mfs_dncflush(cd);
+	    if (*ulp & MVFS_CF_RVC) mfs_viewdirflushrvc(cd);
 	    if (*ulp & MVFS_CF_LKUP) MVFS_FLUSH_CREDLIST(TRUE);
 	    break;
 	}
 
 	case MVFS_CMD_READ_DNC: {
-            error = mvfs_read_dnc(data, callinfo);
+            error = mvfs_read_dnc(data, callinfo, cd);
 	    break;
 	}
 
@@ -1270,12 +1337,12 @@ mvfs_mioctl(
 	}
 #endif
 	case MVFS_CMD_RMALLVIEWTAGS: {
-            error = mvfs_rmallviewtags(data, MVFS_CD2CRED(cd));
+            error = mvfs_rmallviewtags(data, cd);
 	    break;
 	}
 
 	case MVFS_CMD_UNMOUNTALL: {
-	    error = mfs_unregister_all_vobs(MVFS_CD2CRED(cd));
+            error = mfs_unregister_all_vobs(cd);
 	    break;
 	}
 
@@ -1295,7 +1362,7 @@ mvfs_mioctl(
 	}
 
 	case MVFS_CMD_SET_CACHE_SIZES: {
-            error = mvfs_set_cache_sizes(data, MVFS_CD2CRED(cd), callinfo);
+            error = mvfs_set_cache_sizes(data, cd, callinfo);
 	    break;
 	}
 
@@ -1310,12 +1377,12 @@ mvfs_mioctl(
 	}
 
 	case MVFS_CMD_GET_VIEW_STATS: {
-            error = mvfs_get_view_stats(data, MVFS_CD2CRED(cd), callinfo);
+            error = mvfs_get_view_stats(data, cd, callinfo);
             break;
 	}
 
 	case MVFS_CMD_ZERO_VIEW_STATS: {
-            error = mvfs_zero_view_stats(data, MVFS_CD2CRED(cd), callinfo);
+            error = mvfs_zero_view_stats(data, cd, callinfo);
             break;
 	}
 
@@ -1338,6 +1405,14 @@ mvfs_mioctl(
             error = mvfs_set_vobrt_vfsmnt(data, callinfo);
 	    break;
 	}
+
+        case MVFS_CMD_ENABLE_PVIEW_STATS:
+            error = mvfs_enable_pview_stat(data, cd, callinfo);
+            break;
+
+        case MVFS_CMD_DISABLE_PVIEW_STATS:
+            error = mvfs_disable_pview_stat(data, cd, callinfo);
+            break;
 
  	default:
 	    error = ENOTTY;
@@ -1460,7 +1535,7 @@ mvfs_get_vobinfo(
 STATIC int MVFS_NOINLINE
 mvfs_setprocview(
     mvfscmd_block_t *data,
-    CRED_T *cred,
+    CALL_DATA_T *cd,
     MVFS_CALLER_INFO *callinfo
 )
 {
@@ -1489,7 +1564,7 @@ mvfs_setprocview(
     /* Look up new view tag to make sure it is OK */
             
     if (error == 0  && tagn) {
-        error = mfs_viewtaglookup(tagn, &vw, cred);
+        error = mfs_viewtaglookup(tagn, &vw, cd);
         PN_STRFREE(tagn);		/* Done with tagname */
         if (error) { 
             data->status = tbs_errno2status(error);
@@ -1507,7 +1582,7 @@ mvfs_setprocview(
      */
 
     if (error == 0)
-        error = MVFS_SET_PROCVIEW(vw, &data->status);
+        error = MVFS_SET_PROCVIEW(vw, &data->status, cd);
 
 out:
 
@@ -1517,7 +1592,8 @@ out:
 STATIC int MVFS_NOINLINE
 mvfs_get_procviewinfo(
     mvfscmd_block_t *data, 
-    MVFS_CALLER_INFO *callinfo
+    MVFS_CALLER_INFO *callinfo,
+    CALL_DATA_T *cd
 )
 {
     VNODE_T *cdir;
@@ -1541,7 +1617,7 @@ mvfs_get_procviewinfo(
         } else {
             VN_HOLD(vw);	/* Hold view for safety */
             error = mvfs_copyout_viewinfo(&viewinfo, vw);
-            VN_RELE(vw);
+            ATRIA_VN_RELE(vw, cd);
 
             if (error == 0)
                 error = CopyOutMvfs_viewinfo(&viewinfo, 
@@ -1555,7 +1631,7 @@ STATIC int MVFS_NOINLINE
 mvfs_get_viewinfo(
     VNODE_T *vp,
     mvfscmd_block_t *data,
-    CRED_T *cred,
+    CALL_DATA_T *cd,
     MVFS_CALLER_INFO *callinfo
 )
 {
@@ -1569,7 +1645,7 @@ mvfs_get_viewinfo(
         return(error);
     } 
 
-    setview = mfs_getview(NULL, cred, TRUE /* HOLD */);
+    setview = mfs_getview(NULL, MVFS_CD2CRED(cd), TRUE /* HOLD */);
     if (MFS_VIEW(vp) == NULL ||
         (MFS_VIEW(vp) == setview && MFS_ISLOOP(VTOM(vp))))
     {
@@ -1589,7 +1665,7 @@ mvfs_get_viewinfo(
             error = CopyOutMvfs_viewinfo(&viewinfo, data->infop, callinfo);
 
     }
-    if (setview) VN_RELE(setview);
+    if (setview) ATRIA_VN_RELE(setview, cd);
     return(error);
 }
 
@@ -1606,6 +1682,7 @@ mvfs_xstat(
     VATTR_T *vap;
     view_vstat_t *vstatp;
     mfs_mnode_t *mnp;
+    CALL_DATA_T *ncd;
     int  error = 0;
 
     /*
@@ -1639,11 +1716,17 @@ mvfs_xstat(
      *   - For MFS objects it does all the hokum about
      *     kludging size, devs etc. for the external world.
      */
+    ncd = MVFS_ALLOC_SUBSTITUTE_CRED(cd,
+                MVFS_VIEW_CREDS(vp, MVFS_CD2CRED(cd), FALSE));
+    if (MVFS_SUBSTITUTE_CRED_IS_VALID(ncd)) {
     if (MFS_VPISMFS(vp))
-        error = mfs_getattr(vp, vap, 0, MVFS_VIEW_CREDS(vp, cd, FALSE));
+        error = mfs_getattr(vp, vap, 0, ncd);
     else
-        error = MVOP_GETATTR(vp, cvp, vap, 0,
-                             MVFS_VIEW_CREDS(vp, MVFS_CD2CRED(cd), FALSE));
+        error = MVOP_GETATTR(vp, cvp, vap, 0, ncd);
+    MVFS_FREE_SUBSTITUTE_CRED(ncd);
+    } else {
+        error = ENOMEM;
+    }
     if (error) {
         MVFS_FREE_VATTR_FIELDS(vap);
         MVFS_VATTR_FREE(vap);
@@ -1772,7 +1855,10 @@ mvfs_get_clrname(VNODE_T *vp,
         if (MVFS_ISVTYPE(vp, VREG) && 
             mnp->mn_vob.cleartext.nm == NULL) 
         {
-            error = mfs_getcleartext(vp, NULL, MVFS_VIEW_CREDS(vp, cd, TRUE));
+            /* Was MVFS_VIEW_CREDS(vp, cd, TRUE)  Is this the same as the
+             * passed in call_data?
+             */
+            error = mfs_getcleartext(vp, NULL, cd);
         } else {
             /* No cleartext expected, or already have it. */
             error = 0;
@@ -1926,7 +2012,7 @@ STATIC int MVFS_NOINLINE
 mvfs_mkviewtag(
     mvfscmd_block_t *data,
     mvfs_mkviewtag_info_ex_t *vtp_ex,
-    CRED_T *cred,
+    CALL_DATA_T *cd,
     MVFS_CALLER_INFO *callinfo
 )
 {
@@ -1965,7 +2051,7 @@ mvfs_mkviewtag(
     svrp->addr = vtp_ex->addr;
     svrp->down = 0;
     svrp->svrbound = 1;
-    if ((error = mvfs_clnt_ping_server(svrp, cred)) != 0) {
+    if ((error = mvfs_clnt_ping_server(svrp, MVFS_CD2CRED(cd))) != 0) {
         mvfs_log(MFS_LOG_DEBUG, "mvfs_clnt_ping_server failed with error %d\n",
                  error);
         goto cleanup;
@@ -2007,7 +2093,7 @@ mvfs_mkviewtag(
         MVFS_LOCK(&(vrdp->mvfs_mkviewtag_lock));
 
         /* See if existing view-tag */
-        if ((error = mfs_viewtaglookup(tagn, &vw, cred)) == 0) {
+        if ((error = mfs_viewtaglookup(tagn, &vw, cd)) == 0) {
             mnp = VTOM(vw);
             ASSERT(MFS_ISVIEW(mnp));
             MLOCK(mnp);
@@ -2037,7 +2123,7 @@ mvfs_mkviewtag(
 
             MUNLOCK(mnp);
             mvfs_rvcflush(vw, NULL); /* Flush root version cache */
-            if (vw) VN_RELE(vw);
+            if (vw) ATRIA_VN_RELE(vw, cd);
         } else {
             /* Look to see if some process might still be attached to
              * it (but the tag was removed by another process). If so,
@@ -2045,7 +2131,7 @@ mvfs_mkviewtag(
              */
             error = mvfs_viewuuidrecover(tagn,
                                          &(vtp_ex->uuid), host,
-                                         &(vtp_ex->spath), rpn, &vw, cred);
+                                         &(vtp_ex->spath), rpn, &vw, cd);
             switch (error) {
               case 0:
                 mnp = VTOM(vw);
@@ -2057,7 +2143,7 @@ mvfs_mkviewtag(
                 data->status = TBS_ST_OK;
                 MUNLOCK(mnp);
                 mvfs_rvcflush(vw, NULL);	/* Flush root version cache */
-                VN_RELE(vw);
+                ATRIA_VN_RELE(vw, cd);
                 goto out;
 
               default:
@@ -2080,7 +2166,7 @@ mvfs_mkviewtag(
                 ** caller) for Unix views and set correctly for Windows views,
                 ** so we can just use it in either case.
                 */
-            } else if ((error = mfs_viewdirmkdir(dvp, tagn, NULL, &vw, cred,
+            } else if ((error = mfs_viewdirmkdir(dvp, tagn, NULL, &vw, cd,
                                                  host, vtp_ex->windows_view))
                        != 0)
             {
@@ -2131,13 +2217,13 @@ mvfs_mkviewtag(
                 MDKI_CRFREE(vwcreds);
                 MUNLOCK(mnp);
                 mvfs_rvcflush(vw, NULL); /* Flush root version cache */
-                if (vw) VN_RELE(vw);
+                if (vw) ATRIA_VN_RELE(vw, cd);
             }
         }
       out:
         MVFS_UNLOCK(&(vrdp->mvfs_mkviewtag_lock));
         if (dvp != NULL) {
-            VN_RELE(dvp);
+            ATRIA_VN_RELE(dvp, cd);
         }
     }
   cleanup:
@@ -2154,7 +2240,7 @@ mvfs_mkviewtag(
 STATIC int MVFS_NOINLINE
 mvfs_rmviewtag(
     mvfscmd_block_t *data,
-    CRED_T *cred,
+    CALL_DATA_T *cd,
     MVFS_CALLER_INFO *callinfo
 )
 {
@@ -2174,8 +2260,8 @@ mvfs_rmviewtag(
                 error = ENXIO;
             } else {
                 /* Now, remove the view-tag */
-                error = mfs_viewdirrmdir(dvp, tagn, cred);
-                VN_RELE(dvp);
+                error = mfs_viewdirrmdir(dvp, tagn, cd);
+                ATRIA_VN_RELE(dvp, cd);
             }
             PN_STRFREE(tagn);
         }
@@ -2186,7 +2272,7 @@ mvfs_rmviewtag(
 STATIC int MVFS_NOINLINE
 mvfs_exportviewtag(
     mvfscmd_block_t *data,
-    CRED_T *cred,
+    CALL_DATA_T *cd,
     MVFS_CALLER_INFO *callinfo
 )
 {
@@ -2196,7 +2282,7 @@ mvfs_exportviewtag(
     VNODE_T *vw = NULL;
     char *tagn = NULL;
 
-    if (!MDKI_SUSER(cred) || !MDKI_INGLOBALZONE()) {
+    if (!MDKI_SUSER(MVFS_CD2CRED(cd)) || !MDKI_INGLOBALZONE()) {
         error = EPERM;
         MDKI_SET_U_ERROR(0);  /* Eliminate suser side effect. */
     } else if ((error = CopyInMvfs_export_viewinfo(data->infop, 
@@ -2215,15 +2301,15 @@ mvfs_exportviewtag(
                 error = ENXIO;
             /* See if existing view-tag */
             } else {
-                if ((error = mfs_viewtaglookup(tagn, &vw, cred)) 
+                if ((error = mfs_viewtaglookup(tagn, &vw, cd)) 
                        == 0) 
                 {
                     /* do view export stuff */
                     error = mvfs_viewdirexport(dvp, vw, 
                                        export_viewinfo.exportid);
-                    VN_RELE(vw);
+                    ATRIA_VN_RELE(vw, cd);
                 }
-                VN_RELE(dvp);
+                ATRIA_VN_RELE(dvp, cd);
             }
             PN_STRFREE(tagn);
         }
@@ -2234,7 +2320,7 @@ mvfs_exportviewtag(
 STATIC int MVFS_NOINLINE
 mvfs_unexportviewtag(
     mvfscmd_block_t *data,
-    CRED_T *cred,
+    CALL_DATA_T *cd,
     MVFS_CALLER_INFO *callinfo
 )
 {
@@ -2244,7 +2330,7 @@ mvfs_unexportviewtag(
     VNODE_T *vp;
     char *tagn = NULL;
 
-    if (!MDKI_SUSER(cred) || !MDKI_INGLOBALZONE()) {
+    if (!MDKI_SUSER(MVFS_CD2CRED(cd)) || !MDKI_INGLOBALZONE()) {
         error = EPERM;
         MDKI_SET_U_ERROR(0);   /* Eliminate suser side effect */
     } else if ((error = CopyInMvfs_viewtag_info(data->infop, 
@@ -2257,13 +2343,11 @@ mvfs_unexportviewtag(
             if (dvp == NULL) {
                 error = ENXIO;
             } else {
-                if ((error = mfs_viewtaglookup(tagn, &vp, 
-                            cred)) == 0) 
-                {
+                if ((error = mfs_viewtaglookup(tagn, &vp, cd)) == 0) {
                     error = mvfs_viewdirunexport(dvp, vp);
-                    VN_RELE(vp);
+                    ATRIA_VN_RELE(vp, cd);
                 }
-                VN_RELE(dvp);
+                ATRIA_VN_RELE(dvp, cd);
             }
             PN_STRFREE(tagn);
         }
@@ -2274,7 +2358,7 @@ mvfs_unexportviewtag(
 STATIC int MVFS_NOINLINE
 mvfs_get_viewtag_export(
     mvfscmd_block_t *data,
-    CRED_T *cred,
+    CALL_DATA_T *cd,
     MVFS_CALLER_INFO *callinfo
 )
 {
@@ -2293,7 +2377,7 @@ mvfs_get_viewtag_export(
     if ((error = mfs_copyin_strbuf(export_viewinfo.viewtag, 
          &tagn)) == 0) {
 
-        if ((error = mfs_viewtaglookup(tagn, &vp, cred)) == 0) {
+        if ((error = mfs_viewtaglookup(tagn, &vp, cd)) == 0) {
             if (VTOM(vp)->mn_view.exid == (u_int) -1) {
                 data->status = TBS_ST_NOT_FOUND;
             } else {
@@ -2301,7 +2385,7 @@ mvfs_get_viewtag_export(
                 error = CopyOutMvfs_export_viewinfo(
                                 &export_viewinfo, data->infop, callinfo);
             }
-	    VN_RELE(vp);
+	    ATRIA_VN_RELE(vp, cd);
         }
         PN_STRFREE(tagn);
     }
@@ -2390,10 +2474,18 @@ mvfs_set_xattr(
     int  error = 0;
     mvfs_io_xattr_t io_xattr;
     mfs_mnode_t *mnp;
+    CALL_DATA_T *ncd;
 
     if ((error = CopyInMvfs_io_xattr(data->infop, &io_xattr, callinfo)) 
          == 0)
     {
+        ncd = MVFS_ALLOC_SUBSTITUTE_CRED(cd,
+                   MVFS_VIEW_CREDS(vp, MVFS_CD2CRED(cd), FALSE));
+        if (!MVFS_SUBSTITUTE_CRED_IS_VALID(ncd)) {
+            error = ENOMEM;
+            data->status = tbs_errno2status(error);
+            goto cleanup;
+        }
         mnp = VTOM(vp);
         data->status = TBS_ST_OK;
         if (!MFS_ISVOB(mnp)) {		/* Vob objects only */
@@ -2406,8 +2498,7 @@ mvfs_set_xattr(
 	        case MVFS_IO_XATTR_MTYPE:	
                     error = mfs_clnt_change_mtype(vp, 
 				    (vob_mtype_t)io_xattr.xvalue
-                                    , &data->status, 
-				    MVFS_VIEW_CREDS(vp, cd, FALSE));
+                                    , &data->status, ncd);
 		    break;
 	        case MVFS_IO_XATTR_XMODE:
 		    if (io_xattr.xvalue != TBS_FMODE_AUDITED_OBJ)
@@ -2419,8 +2510,7 @@ mvfs_set_xattr(
 		    MLOCK(mnp);
 		    error = mvfs_clnt_setattr_locked(vp,
 				    NULL, io_xattr.xvalue,
-				    MFS_USE_PROCBH, 0,  
-				    MVFS_VIEW_CREDS(vp, cd, FALSE), 0);
+				    MFS_USE_PROCBH, 0, ncd, 0);
 		    MUNLOCK(mnp);
 		    break;
 	    case MVFS_IO_XATTR_NTFILEATTRS:
@@ -2433,7 +2523,9 @@ mvfs_set_xattr(
     	        error = CopyOutMvfs_io_xattr(&io_xattr, 
                                              data->infop, callinfo);
         }
+        MVFS_FREE_SUBSTITUTE_CRED(ncd);
     }
+cleanup:
     return(error);
 }
 
@@ -2486,7 +2578,8 @@ mvfs_get_viewtag_dir(
 STATIC int MVFS_NOINLINE
 mvfs_read_dnc(
     mvfscmd_block_t *data, 
-    MVFS_CALLER_INFO *callinfo
+    MVFS_CALLER_INFO *callinfo,
+    CALL_DATA_T *cd
 )
 {
     int  error = 0;
@@ -2497,7 +2590,7 @@ mvfs_read_dnc(
     }
     if ((error = CopyInMfs_ioncent(data->infop, ioncentp, callinfo)) == 0)
     {
-        if ((error = mfs_dnc_getent(ioncentp)) == 0)
+        if ((error = mfs_dnc_getent(ioncentp, cd)) == 0)
             error = CopyOutMfs_ioncent(ioncentp, data->infop, callinfo);
     }
     KMEM_FREE(ioncentp, sizeof(*ioncentp));
@@ -2551,7 +2644,7 @@ mvfs_set_loginfo(
         } else {
             if (loginfo.mask & MVFS_LOGINFO_KERNLOGFILE) {
                 if (loginfo.kernlog_pn.l == 0)
-                    mvfs_logfile_close();
+                    mvfs_logfile_close(cd);
                 else {
                     error = mfs_copyin_strbufpn(
                                             loginfo.kernlog_pn,
@@ -2773,7 +2866,7 @@ mvfs_get_stats(
 STATIC int MVFS_NOINLINE
 mvfs_rmallviewtags(
     mvfscmd_block_t *data, 
-    CRED_T *cred
+    CALL_DATA_T *cd
 )
 {
     int  error;
@@ -2798,12 +2891,12 @@ mvfs_rmallviewtags(
         KMEM_FREE(dirbufp, direntlen);
         error = ENXIO;
     } else {
-        mfs_viewdiropen(&dvp, 0, cred);
+        mfs_viewdiropen(&dvp, 0, MVFS_CD2CRED(cd));
         error = 0;
         while (!error) {
             mfs_uioset (&uio, dirbufp, direntlen, 
                         MVFS_UIO_OFFSET(&uio), UIO_SYSSPACE);
-            error = mvfs_viewdirreaddir(dvp, &uio, cred, &eofp);
+            error = mvfs_viewdirreaddir(dvp, &uio, MVFS_CD2CRED(cd), &eofp);
             if ((error) || (uio.uio_resid == direntlen))
                 break;
             direntp = (KDIRENT_T *) dirbufp;
@@ -2814,17 +2907,17 @@ mvfs_rmallviewtags(
                            MVFS_SPECDEV) != 0)
                 {
                     mfs_viewdirrmdir(dvp, 
-                             KDIRENT_GET_NAME(direntp), cred);
+                             KDIRENT_GET_NAME(direntp), cd);
                 }
                 direntp = (KDIRENT_T *) 
                           (((caddr_t)(direntp)) + 
                              KDIRENT_GET_RECLEN(direntp));
             }
         }
-        mfs_viewdirclose(dvp, 0, 0, cred);
+        mfs_viewdirclose(dvp, 0, 0, MVFS_CD2CRED(cd));
         KMEM_FREE(dirbufp, direntlen);
 
-        VN_RELE(dvp);
+        ATRIA_VN_RELE(dvp, cd);
     }
     return(error);
 }
@@ -2955,7 +3048,7 @@ mvfs_get_cache_usage(
 STATIC int MVFS_NOINLINE
 mvfs_set_cache_sizes(
     mvfscmd_block_t *data,
-    CRED_T *cred,
+    CALL_DATA_T *cd,
     MVFS_CALLER_INFO *callinfo
 )
 {
@@ -2968,12 +3061,12 @@ mvfs_set_cache_sizes(
         return(error);
     }
 
-    if (MDKI_INGLOBALZONE() && MDKI_SUSER(cred)) {
+    if (MDKI_INGLOBALZONE() && MDKI_SUSER(MVFS_CD2CRED(cd))) {
         if (mvfs_cache_size.version >= MVFS_SETCACHE_VERSION) {
             mvfs_cache_size.version = MVFS_SETCACHE_VERSION; /* return it */
-            error = mvfs_mn_setcaches(&mvfs_cache_size);
+            error = mvfs_mn_setcaches(&mvfs_cache_size, cd);
             if (!error)
-                error = mvfs_dnc_setcaches(&mvfs_cache_size);
+                error = mvfs_dnc_setcaches(&mvfs_cache_size, cd);
             if (!error)
                 error = mvfs_rpc_setcaches(&mvfs_cache_size);
             if (!error)
@@ -2985,6 +3078,7 @@ mvfs_set_cache_sizes(
         error = EPERM;
         MDKI_SET_U_ERROR(0);   /* Eliminate suser side effect. */
     }
+
     return(error);
 }
 
@@ -3074,7 +3168,7 @@ mvfs_compute_cache_defaults(
 STATIC int MVFS_NOINLINE
 mvfs_get_view_stats(
     mvfscmd_block_t *data,
-    CRED_T *cred,
+    CALL_DATA_T *cd,
     MVFS_CALLER_INFO *callinfo
 )
 {
@@ -3083,6 +3177,7 @@ mvfs_get_view_stats(
     char *tagn = NULL;
     mvfs_statbufs_t *sp;
     VNODE_T *vw = NULL;
+    mvfs_common_data_t *mcdp = MDKI_COMMON_GET_DATAP();
 
     if ((mvwsp = KMEM_ALLOC(sizeof(*mvwsp), KM_SLEEP)) == NULL) {
         return(ENOMEM);
@@ -3092,9 +3187,25 @@ mvfs_get_view_stats(
     if ((error = CopyInMvfs_viewstats(data->infop, mvwsp, callinfo)) != 0) {
         goto cleanup;
     }
+
+    /* Copy out the status of per-view statistics collection.  It is disabled
+     * by default.
+     */
+    error = COPYOUT((caddr_t)&(mcdp->mvfs_pview_stat_enabled),
+                    (caddr_t)(mvwsp->mvfs_pview_stat_enabled.s),
+                    KS_MIN(mvwsp->mvfs_pview_stat_enabled.m,
+                           sizeof(int)));
+    if (error != 0) {
+        mvfs_log(MFS_LOG_DEBUG,
+                 "Copyout failed for mvfs_pview_stat_enabled. "
+                 "error=%d, status=%d\n",
+                 error, tbs_errno2status(error));
+        goto cleanup;
+    }
+
     if ((error = mfs_copyin_strbuf(mvwsp->viewtag, &tagn)) == 0) {
         /* See if existing viewtag */
-        error = mfs_viewtaglookup(tagn, &vw, cred); 
+        error = mfs_viewtaglookup(tagn, &vw, cd); 
         PN_STRFREE(tagn);
         if (error == 0) {
             if (sp->clntstat.s && sp->clntstat.m) {
@@ -3121,18 +3232,116 @@ mvfs_get_view_stats(
                                    sizeof(struct mfs_dncstat)));
                 }
             }    
-            VN_RELE(vw);
+            ATRIA_VN_RELE(vw, cd);
         }    
     }
+
   cleanup:
     KMEM_FREE(mvwsp, sizeof(*mvwsp));
+    return(error);
+}
+
+/* This routine called via MVFS_CMD_ENABLE_PVIEW_STATS IOCTL is used to enable
+ * per-view statistics collection.  It was found that these statistics are
+ * rarely used and more importantly the lock "mvfs_pvac_statlock", protecting
+ * mfs_acstat sub-structure in per-view statistics structure is one of the top
+ * contended locks.  Hence, per-view statistics collection is disabled by
+ * default to improve performance on multi-core, multi-processor systems.
+ */
+STATIC int MVFS_NOINLINE
+mvfs_enable_pview_stat(
+    mvfscmd_block_t *data,
+    CALL_DATA_T *cd,
+    MVFS_CALLER_INFO *callinfo
+)
+{
+    int  error = 0;
+    int vnum;
+    VNODE_T *vwroot, *vw;
+    struct mvfs_pvstat *pvp;
+    register mfs_mnode_t *vwrootmnp;
+    mvfs_common_data_t *mcdp = MDKI_COMMON_GET_DATAP();
+
+    /* Error out if per-view statistics collection is already enabled. */
+    if (mcdp->mvfs_pview_stat_enabled == TRUE) {
+        mvfs_log(MFS_LOG_DEBUG, "pview stat already enabled.\n");
+        return(EINVAL);
+    }
+
+    /* Enable per-view statistics */
+    mcdp->mvfs_pview_stat_enabled = TRUE;
+
+    /* Need to zero out the per-view statistics collected in all
+     * the active views.  It is done with the viewroot mnode locked.
+     * This should not be a problem as users would be enabling per-view
+     * statistics rarely. 
+     */
+    vwroot = mfs_getviewroot();
+    if (!vwroot) {
+        /* If we did not find the view root then cannot zero out
+         * the collected per-view statistics.  Hence, disabling per-view
+         * stat and returning an error.
+         */
+        mvfs_log(MFS_LOG_ERR,
+                 "Failed to enable per-view statistics: View root not found\n");
+        mcdp->mvfs_pview_stat_enabled = FALSE;
+        return(ENOENT);
+    }
+
+    vwrootmnp = VTOM(vwroot);
+    MLOCK(vwrootmnp);
+
+    for (vnum = 0; vnum < vwrootmnp->mn_ramdir.hwm; vnum++) {
+        if (vwrootmnp->mn_ramdir.ents[vnum].nm == NULL) continue;
+
+        vw = vwrootmnp->mn_ramdir.ents[vnum].vp;
+
+        /* Skip if this is not a view vnode */
+        if (MFS_VPISMFS(vw) && MFS_ISVIEW(VTOM(vw))) {
+            MFS_HOLDVW(vw);
+            pvp = VTOM(vw)->mn_view.pvstat;
+            mvfs_pview_stat_zero(pvp);
+            ATRIA_VN_RELE(vw,cd);
+        }
+    }
+
+    MUNLOCK(vwrootmnp);
+    ATRIA_VN_RELE(vwroot,cd);
+    error = 0;
+
+    return(error);
+}
+
+/* This routine called via the MVFS_CMD_DISABLE_PVIEW_STATS IOCTL is used to
+ * disable the per-view statistics collection if it was enabled using the
+ * MVFS_CMD_ENABLE_PVIEW_STATS IOCTL.
+ */
+STATIC int MVFS_NOINLINE
+mvfs_disable_pview_stat(
+    mvfscmd_block_t *data,
+    CALL_DATA_T *cd,
+    MVFS_CALLER_INFO *callinfo
+)
+{
+    int  error = 0;
+    mvfs_common_data_t *mcdp = MDKI_COMMON_GET_DATAP();
+
+    /* Disable per-view statistics collection if it is enabled. */
+    if (mcdp->mvfs_pview_stat_enabled == TRUE) {
+        mcdp->mvfs_pview_stat_enabled = FALSE;
+        error = 0;
+    } else {
+        error = EINVAL;
+        mvfs_log(MFS_LOG_DEBUG, "Pview stat already disabled.\n");
+    }
+
     return(error);
 }
 
 STATIC int MVFS_NOINLINE
 mvfs_zero_view_stats(
     mvfscmd_block_t *data,
-    CRED_T *cred,
+    CALL_DATA_T *cd,
     MVFS_CALLER_INFO *callinfo
 )
 {
@@ -3150,16 +3359,16 @@ mvfs_zero_view_stats(
                                    &tagn)) == 0)
     {
             /* See if existing viewtag */
-            error = mfs_viewtaglookup(tagn, &vw, cred); 
+            error = mfs_viewtaglookup(tagn, &vw, cd); 
             PN_STRFREE(tagn);       
             if (error == 0 ) {
-                if (MDKI_SUSER(cred)) {
+                if (MDKI_SUSER(MVFS_CD2CRED(cd))) {
                     MVFS_PVSTAT_ZERO(vw);
                 } else {
                     error = EPERM;
                     MDKI_SET_U_ERROR(0); /* Eliminate suser side effect. */ 
                 }
-               VN_RELE(vw);
+               ATRIA_VN_RELE(vw, cd);
             }
     }
     return(error);
@@ -3259,7 +3468,8 @@ mvfs_addup_clntstat(
     ADDUP_FIELD(mfsfail);
     ADDUP_FIELD(mfsintr);
     ADDUP_FIELD(mfsmaxdelay);
-    ADDUP_FIELD(mfsmaxdelaytime);
+    sdp->mfs_clntstat.mfsmaxdelaytime = KS_MAX(sdp->mfs_clntstat.mfsmaxdelaytime,
+        percpu_sdp->mfs_clntstat.mfsmaxdelaytime);
 
     mvfs_add_times(&(sdp->mfs_clntstat.mvfsthread_time),
                    &(percpu_sdp->mfs_clntstat.mvfsthread_time));
@@ -3608,11 +3818,21 @@ mvfs_add_times(
 void
 mvfs_pview_stat_zero(struct mvfs_pvstat *pvp)
 {
+        SPL_T s;
+
+        MVFS_PVCLNT_STATLOCK_LOCK(s, pvp);
         BZERO(&(pvp->clntstat), sizeof(struct mfs_clntstat));
-        BZERO(&(pvp->acstat), sizeof(struct mfs_acstat));
-        BZERO(&(pvp->dncstat), sizeof(struct mfs_dncstat));
         pvp->clntstat.version = MFS_CLNTSTAT_VERS;
+        MVFS_PVCLNT_STATLOCK_UNLOCK(s, pvp);
+
+        MVFS_PVAC_STATLOCK_LOCK(s, pvp);
+        BZERO(&(pvp->acstat), sizeof(struct mfs_acstat));
         pvp->acstat.version = MFS_ACSTAT_VERS;
+        MVFS_PVAC_STATLOCK_UNLOCK(s, pvp);
+
+        MVFS_PVDNC_STATLOCK_LOCK(s, pvp);
+        BZERO(&(pvp->dncstat), sizeof(struct mfs_dncstat));
         pvp->dncstat.version = MFS_DNCSTAT_VERS;
+        MVFS_PVDNC_STATLOCK_UNLOCK(s, pvp);
 }
-static const char vnode_verid_mvfs_mioctl_c[] = "$Id:  3f98b9aa.63e14a7a.a64b.16:ab:42:05:94:b4 $";
+static const char vnode_verid_mvfs_mioctl_c[] = "$Id:  2e375c13.4af411e3.85fe.00:01:83:0d:bf:e7 $";

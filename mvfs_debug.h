@@ -1,4 +1,4 @@
-/* * (C) Copyright IBM Corporation 1990, 2011. */
+/* * (C) Copyright IBM Corporation 1990, 2013. */
 /*
  This program is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License as published by
@@ -70,9 +70,9 @@ __declspec(dllexport)
 #endif
 #endif
 void
-mvfs_log(P1(int pri)
-	 PN(A_CONST char *fmt)
-	 PN(...));
+mvfs_log(int pri,
+         A_CONST char *fmt,
+         ...);
 
 EXTERN void
 mvfs_vlog(
@@ -82,10 +82,10 @@ mvfs_vlog(
 );
 
 EXTERN void
-mvfs_logperr(P1(int pri)
-	     PN(int err)
-	     PN(A_CONST char *fmt)
-	     PN(...));
+mvfs_logperr(int pri,
+             int err,
+             A_CONST char *fmt,
+             ...);
 
 EXTERN void
 mvfs_log_sevpri(
@@ -194,19 +194,19 @@ mvfs_logperr_sevpri(
 /* Macro to print vnode op info */
 
 EXTERN void
-mdb_vlog(P1(u_int op)
-	 PN(A_CONST char *fmt)
-	 PN(...));
+mdb_vlog(u_int op,
+         A_CONST char *fmt,
+         ...);
 
 EXTERN void
-mdb_vfslog(P1(u_int op)
-	   PN(A_CONST char *fmt)
-	   PN(...));
+mdb_vfslog(u_int op,
+           A_CONST char *fmt,
+           ...);
 
 EXTERN void
-mdb_xlog(P1(u_int op)
-	 PN(A_CONST char *fmt)
-	 PN(...));
+mdb_xlog(u_int op
+         A_CONST char *fmt,
+         ...);
 
 #define MDB_VLOG(x) mdb_vlog x
 
@@ -234,8 +234,8 @@ mdb_xlog(P1(u_int op)
  * Macros to run consistency checks inside the kernel
  */
 
-EXTERN void mfs_chkpoint(P1(int));
-EXTERN void mfs_chkpages(P1(VNODE_T *) PN(int));
+EXTERN void mfs_chkpoint(int);
+EXTERN void mfs_chkpages(VNODE_T *, int);
 #define MDB_CHKPOINT(bg)  mfs_chkpoint(bg)
 #define MDB_NOPAGES(vp)	mfs_chkpages(vp,0);
 #define MDB_NODELWRI(vp) mfs_chkpages(vp,1);
@@ -248,4 +248,4 @@ EXTERN void mfs_chkpages(P1(VNODE_T *) PN(int));
 
 #endif	/* MVFS_DEBUG */
 #endif	/* MFS_DEBUG_H_ */
-/* $Id: f6a498eb.f00111e0.81ce.00:01:84:c3:8b:ce $ */
+/* $Id: 0fd7b854.135e4c74.b0e5.b2:fc:58:19:77:82 $ */

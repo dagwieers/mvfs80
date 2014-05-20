@@ -1,4 +1,4 @@
-/* * (C) Copyright IBM Corporation 1991, 2010. */
+/* * (C) Copyright IBM Corporation 1991, 2012. */
 /*
  This program is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License as published by
@@ -214,7 +214,7 @@ mfs_dncadd(
     u_int dnc_flags,
     char *nm,
     VNODE_T *vp,
-    CRED_T *cred
+    CALL_DATA_T *cd
 );
 
 /**************************************************************************
@@ -304,7 +304,7 @@ EXTERN int
 mfs_dncremove_one(
     VNODE_T *dvp,
     char *nm,
-    CRED_T *cred
+    CALL_DATA_T *cd
 );
 
 /***************************************************************************
@@ -336,7 +336,7 @@ EXTERN int
 mfs_dncremove(
     VNODE_T *dvp,
     char *nm,
-    CRED_T *cred
+    CALL_DATA_T *cd
 );
 
 /**************************************************************************
@@ -349,7 +349,7 @@ mfs_dncremove(
  *      (i.e. for an unmount etc.)
  */
 EXTERN void 
-mfs_dncflush(void);
+mfs_dncflush(CALL_DATA_T *cd);
 
 /**************************************************************************
  * MFS_DNC_FLUSHVW(VNODE_T *vw);
@@ -367,7 +367,10 @@ mfs_dncflush(void);
  */
 
 EXTERN void 
-mfs_dnc_flushvw(VNODE_T *vw);
+mfs_dnc_flushvw(
+    VNODE_T *vw,
+    CALL_DATA_T *cd
+);
 
 /**************************************************************************
  * MVFS_DNC_FLUSHVFS(VFS_T *vfsp);
@@ -382,7 +385,10 @@ mfs_dnc_flushvw(VNODE_T *vw);
  */
 
 EXTERN void 
-mvfs_dnc_flushvfs(VFS_T *vfsp);
+mvfs_dnc_flushvfs(
+    VFS_T *vfsp,
+    CALL_DATA_T *cd
+);
 
 /**************************************************************************
  * MFS_DNC_INVALVP - invalidate name cache entries for an object
@@ -440,7 +446,10 @@ mfs_dnc_invalvw(VNODE_T *vw);
  */
 
 EXTERN int 
-mfs_dnc_getent(struct mfs_ioncent *ncp);
+mfs_dnc_getent(
+    struct mfs_ioncent *ncp,
+    CALL_DATA_T *cd
+);
 
 /***************************************************************************
  * MVFS_DNCFREE - clean up and release all resources used by the name cache
@@ -461,7 +470,10 @@ mvfs_dnc_count(mvfs_cache_usage_t *curusage);
  * IN szp		ptr to new cache sizes structure
  */
 EXTERN int 
-mvfs_dnc_setcaches(mvfs_cache_sizes_t *szp);
+mvfs_dnc_setcaches(
+    mvfs_cache_sizes_t *szp,
+    CALL_DATA_T *cd
+);
 
 /***************************************************************************
  * MVFS_DNC_GETCACHES - fetch the sizes of the DNC
@@ -521,8 +533,8 @@ mvfs_rvcenter(
     VNODE_T *vw,
     VNODE_T *vobrtvp,
     mfs_fid_t *fidp,
-    CRED_T *cred
+    CALL_DATA_T *cd
 );
 
 #endif /* MFS_DNC_H_ */
-/* $Id: 08249f03.f00211e0.81ce.00:01:84:c3:8b:ce $ */
+/* $Id: 25a1fda2.62324432.b22d.8b:8b:71:f5:f9:ae $ */

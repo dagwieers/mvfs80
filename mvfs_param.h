@@ -1,4 +1,4 @@
-/* * (C) Copyright IBM Corporation 1991, 2012. */
+/* * (C) Copyright IBM Corporation 1991, 2013. */
 /*
  This program is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License as published by
@@ -197,6 +197,12 @@ EXTERN PARAM_TYPE mvfs_dncnoentmax;
  *                              will force access time of that file to be 
  *                              updated (keeps scrubber informed of access 
  *                              regardless of cleartext filesystem caching)  
+ * mvfs_expected_zone_count:    Number of Non-Global Zones(NGZ) that can be
+ *                              expected on a Solaris host which supports
+ *                              NGZ.
+ * mvfs_pview_stat_enabled:     Tunable to enable or disable per-view statistics
+ *                              collection.  Per-view statistics collection is
+ *                              turned off by default.
  */
 
 EXTERN PARAM_TYPE mvfs_max_rpcdelay;
@@ -210,8 +216,10 @@ EXTERN PARAM_TYPE mvfs_rddir_blocks;
 EXTERN PARAM_TYPE mvfs_threadhash_sz;
 EXTERN PARAM_TYPE mvfs_ctxt_atime_refresh;
 
+EXTERN PARAM_TYPE mvfs_pview_stat_enabled;
+
 #undef PARAM_TYPE
 /* leave MVFS_PARAM_TYPE visible for other users */
 
 #endif	/* MVFS_PARAM_H_ */
-/* $Id: 8d7acfac.f14111e1.9c93.00:01:84:c3:8a:52 $ */
+/* $Id: df4088c8.7c2842c2.be7a.3d:7a:29:50:c0:52 $ */

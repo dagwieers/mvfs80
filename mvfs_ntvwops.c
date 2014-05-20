@@ -1,4 +1,4 @@
-/* * (C) Copyright IBM Corporation 1993, 2005. */
+/* * (C) Copyright IBM Corporation 1993, 2013. */
 /*
  This program is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License as published by
@@ -140,14 +140,15 @@ CRED_T *cred;
  * RESULT:              Unix errno
  */
 int 
-mvfs_ntvw_lookup(dvp, nm, vpp, pnp, flags, rdir, cred)
-VNODE_T *dvp;
-char *nm;
-VNODE_T **vpp;
-struct pathname *pnp;
-int flags;
-VNODE_T *rdir;
-CRED_T *cred;
+mvfs_ntvw_lookup(
+  VNODE_T *dvp,
+  char *nm,
+  VNODE_T **vpp,
+  struct pathname *pnp,
+  int flags,
+  VNODE_T *rdir,
+  CALL_DATA_T *cd
+)
 {
     register mfs_mnode_t *mnp;
     VNODE_T *vp;
@@ -184,7 +185,7 @@ CRED_T *cred;
 
     if (PN_STRCMP(MVFS_PN_CI_LOOKUP(pnp), nm, "SETVIEW^") == 0) {
         VN_HOLD(dvp);                           /* Hold for setview call */
-        error = MVFS_SET_PROCVIEW(dvp, NULL);   /* Set the view-tag */
+        error = MVFS_SET_PROCVIEW(dvp, NULL,cd);   /* Set the view-tag */
         if (!error) {
             *vpp = dvp;
             VN_HOLD(*vpp);
@@ -225,13 +226,13 @@ CRED_T *cred;
 
     /* Make a VOBRT vnode in the desired view */
 
-    error2 = mfs_makevobrtnode(MFS_VIEW(dvp), vfsp, vpp);
+    error2 = mfs_makevobrtnode(MFS_VIEW(dvp), vfsp, vpp, cd);
     if (error == 0)
         error = error2;
 
     /* Done with non-view mount-point */
 
-    VN_RELE(vp);
+    ATRIA_VN_RELE(vp, cd);
 
     /* 
      * Either return the VOBRT and no error, or the error returned
@@ -250,11 +251,12 @@ done:
  * RESULT:              Unix errno
  */
 int 
-mvfs_ntvw_readdir(dvp, uiop, cred, eofp)
-VNODE_T *dvp;
-struct uio *uiop;
-CRED_T *cred;
-int *eofp;
+mvfs_ntvw_readdir(
+  VNODE_T *dvp,
+  struct uio *uiop,
+  CALL_DATA_T *cd,
+  int *eofp
+)
 {
     register mfs_mnode_t *mnp;
     size_t direntlen = KDIRENT_RECLEN(MAXNAMELEN);
@@ -407,7 +409,7 @@ int *eofp;
 
 	/* Done with the root vnode */
 
-	VN_RELE(vp);
+	ATRIA_VN_RELE(vp,cd);
 
   	/* See if room in user buffer */
 
@@ -446,4 +448,4 @@ exit_no_lock:
     return(error);
 }
 
-static const char vnode_verid_mvfs_ntvwops_c[] = "$Id:  e7f2a8f4.637911da.8655.00:01:83:a6:4c:63 $";
+static const char vnode_verid_mvfs_ntvwops_c[] = "$Id:  87162141.980a4b95.92d3.f2:72:34:db:e4:3d $";

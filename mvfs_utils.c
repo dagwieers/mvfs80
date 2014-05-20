@@ -1,4 +1,4 @@
-/* * (C) Copyright IBM Corporation 1990, 2011. */
+/* * (C) Copyright IBM Corporation 1990, 2013. */
 /*
  This program is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License as published by
@@ -216,10 +216,12 @@ char *s;
 /* MFS_COPYOUT_VIEWTAG - routine to copyout a view tag name for ioctls */
 
 int
-mfs_copyout_viewtag(err_if_stale, str, vw)
-int err_if_stale;
-mfs_strbufpn_t str;
-VNODE_T *vw;
+mfs_copyout_viewtag(
+    int err_if_stale,
+    mfs_strbufpn_t str,
+    VNODE_T *vw,
+    CALL_DATA_T *cd
+)
 {
     mfs_mnode_t *mnp;
     int id;
@@ -258,7 +260,7 @@ VNODE_T *vw;
     }
     MUNLOCK(mnp);
     MUNLOCK(VTOM(vwroot));
-    VN_RELE(vwroot);
+    ATRIA_VN_RELE(vwroot, cd);
     return(error);
 }
 
@@ -339,7 +341,7 @@ int error;
 
         /* Other errors */
         default:
-            mth = mvfs_mythread();
+            mth = mvfs_mythread(NULL);
             MVFS_SNPRINTF(mth->thr_errstr, sizeof(mth->thr_errstr),
                           " - error %d", error);
             return(mth->thr_errstr);
@@ -990,6 +992,7 @@ mvfs_logfile_set(
     int error;
     CLR_VNODE_T *newvp;
     char *lfname;
+    MVFS_DECLARE_TEMP_CD(temp_cd);
     void *tmp_printf_filp = NULL;
 
     /* Get copy early */
@@ -1006,18 +1009,23 @@ mvfs_logfile_set(
         } else if (!MVFS_ISVTYPE(MVFS_CVP_TO_VP(newvp), VREG)) {
             error = EISDIR;
         } else
-            error = MVOP_OPEN_KERNEL(&newvp, FWRITE, MVFS_CD2CRED(cd),
+            error = MVOP_OPEN_KERNEL(&newvp, FWRITE, cd,
                                      &tmp_printf_filp);
 
         if (error == 0) {
             if (mvfs_printf_logvp != 0) {
+                /* Hybrid call_data to use saved logfile cred with thread
+                 * info from the call_data which was passed in. 
+                 */
+                MVFS_INIT_TEMP_CD(temp_cd_p, printf_log_cred,
+                                   MVFS_CD2THREAD(cd));
                 MVOP_FSYNC_KERNEL(MVFS_CVP_TO_VP(mvfs_printf_logvp),
-                                  FLAG_DATASYNC, MVFS_CD2CRED(cd), printf_filp);
+                                  FLAG_DATASYNC, temp_cd_p, printf_filp);
                 (void) MVOP_CLOSE_KERNEL(mvfs_printf_logvp, FWRITE,
                                          MVFS_LASTCLOSE_COUNT,
-                                         (MOFFSET_T)0, printf_log_cred,
+                                         (MOFFSET_T)0, temp_cd_p,
                                          printf_filp);
-                CVN_RELE(mvfs_printf_logvp);
+                CVN_RELE(mvfs_printf_logvp, temp_cd_p);
                 MDKI_CRFREE(printf_log_cred);
             }
             mvfs_printf_logvp = newvp;
@@ -1032,7 +1040,7 @@ mvfs_logfile_set(
             printf_loglen = STRLEN(logfile)+1;
             printf_log_cred = MDKI_CRDUP(MVFS_CD2CRED(cd)); /* take private copy */
         } else {
-            CVN_RELE(newvp);
+            CVN_RELE(newvp, cd);
         }
     }
 
@@ -1043,12 +1051,13 @@ mvfs_logfile_set(
 }
 
 void
-mvfs_logfile_close()
+mvfs_logfile_close(CALL_DATA_T *cd)
 {
     CLR_VNODE_T *tmp_printf_logvp;
-    CRED_T * tmp_printf_log_cred;
+    CRED_T *tmp_printf_log_cred;
     void *tmp_printf_filp;
     char *tmp_printf_logfilename;
+    MVFS_DECLARE_TEMP_CD(temp_cd);
 
     MVFS_LOCK(&mvfs_printf_lock);
     
@@ -1059,25 +1068,28 @@ mvfs_logfile_close()
         tmp_printf_filp = printf_filp;
         tmp_printf_logfilename = printf_logfilename;
         /** Null out the parameters.  This will prevent further logging */
-	mvfs_printf_logvp = NULL;
+        mvfs_printf_logvp = NULL;
         printf_filp = NULL;
-	printf_logfilename = NULL;
-	printf_loglen = 0;
-	printf_log_cred = NULL;
+        printf_logfilename = NULL;
+        printf_loglen = 0;
+        printf_log_cred = NULL;
         /* Release the lock */
         MVFS_UNLOCK(&mvfs_printf_lock);
 
         /* Now clean up outside the lock.  This will prevent recursive
          * lock panics if anyone adds logging code to any of the following
-         * calls.
+         * calls.   Hybrid call_data uses saved logfile cred + thread
+         * info from the call_data which was passed in.
          */
+        MVFS_INIT_TEMP_CD(temp_cd_p, tmp_printf_log_cred, MVFS_CD2THREAD(cd));
 	MVOP_FSYNC_KERNEL(MVFS_CVP_TO_VP(tmp_printf_logvp),
-                          FLAG_DATASYNC, tmp_printf_log_cred, tmp_printf_filp);
-	(void) MVOP_CLOSE_KERNEL(tmp_printf_logvp, FWRITE, MVFS_LASTCLOSE_COUNT,
-                          (MOFFSET_T)0, tmp_printf_log_cred, tmp_printf_filp);
-	REAL_CVN_RELE(tmp_printf_logvp); /* don't do logging VN_RELE()! */
-	if (tmp_printf_logfilename != NULL)
-	  PN_STRFREE(tmp_printf_logfilename);
+                          FLAG_DATASYNC, temp_cd_p, tmp_printf_filp);
+	(void)MVOP_CLOSE_KERNEL(tmp_printf_logvp, FWRITE, MVFS_LASTCLOSE_COUNT,
+                                (MOFFSET_T)0, temp_cd_p, tmp_printf_filp);
+	REAL_CVN_RELE(tmp_printf_logvp, temp_cd_p); /* don't do logging VN_RELE()! */
+	if (tmp_printf_logfilename != NULL) {
+            PN_STRFREE(tmp_printf_logfilename);
+        }
 	MDKI_CRFREE(tmp_printf_log_cred);
         return;
     }
@@ -1103,16 +1115,18 @@ register size_t *len;				/* in/out */
 }
 
 void
-mvfs_logfile_putstr(str, len, nofileoffset)
-A_CONST char *str;
-u_int len;
-int nofileoffset;
+mvfs_logfile_putstr(
+    A_CONST char *str,
+    u_int len,
+    int nofileoffset
+)
 {
     struct uio uios;
     IOVEC_T iov;
     struct uio *uiop;
     VATTR_T *vap = NULL;
     int error = 0;
+    MVFS_DECLARE_TEMP_CD(cd);
 
     if (mvfs_printf_logvp == NULL) {
         /* If not going to file, skip first "nofileoffset" bytes */
@@ -1131,20 +1145,32 @@ int nofileoffset;
     }
 
     MVFS_LOCK(&mvfs_printf_lock);
+
+    /* Note, mvfs_mythread() won't be called by platforms that don't define
+    ** MVFS_INIT_TEMP_CD since mvfs_systm.h just turns it into an assignment of
+    ** the cred argument.  This is good because this routine is called by
+    ** mvfs_logfile_vprintf_3(), which is called by mvfs_log(), which is used in
+    ** mvfsinit() to print the MVFS version string into the log before the proc
+    ** lock hash table is initialized (and mvfs_mythread() needs the proc lock).
+    ** This seems to work on Windows (XXX and maybe Linux) since the lock must
+    ** be initialized earlier.
+    */
+    MVFS_INIT_TEMP_CD(cd_p, printf_log_cred, mvfs_mythread(NULL));
+
     uiop = &uios;
     uios.uio_iov = &iov;
 
     VATTR_NULL(vap);
     VATTR_SET_MASK(vap, AT_SIZE);
     error = MVOP_GETATTR(MVFS_CVP_TO_VP(mvfs_printf_logvp),
-                         mvfs_printf_logvp, vap, 0, printf_log_cred);
+                         mvfs_printf_logvp, vap, 0, cd_p);
     if (error) {
         goto cleanup;
     }
     mfs_uioset(&uios, (caddr_t) str, len, vap->va_size, UIO_SYSSPACE);
 
     MVOP_RWWRLOCK(mvfs_printf_logvp, NULL);
-    (void) MVOP_WRITE_KERNEL(mvfs_printf_logvp, &uios, 0, NULL, printf_log_cred,
+    (void) MVOP_WRITE_KERNEL(mvfs_printf_logvp, &uios, 0, NULL, cd_p,
                              printf_filp);
     MVOP_RWWRUNLOCK(mvfs_printf_logvp, NULL);
 
@@ -1532,4 +1558,4 @@ mvfs_bumptime(
 
     return;
 }
-static const char vnode_verid_mvfs_utils_c[] = "$Id:  e15ce4fa.37d311e1.8ef1.00:01:84:c3:8b:ce $";
+static const char vnode_verid_mvfs_utils_c[] = "$Id:  c9627492.113d4bcb.a6e2.9b:51:24:e9:78:cf $";

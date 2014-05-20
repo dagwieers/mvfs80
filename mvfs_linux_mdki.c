@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 1999, 2012 IBM Corporation.
+ * Copyright (C) 1999, 2013 IBM Corporation.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -38,7 +38,6 @@
 #endif /* RATL_COMPAT32 */
 #include <linux/swap.h>
 
-STATIC MVFS_KMEM_CACHE_T *vnlayer_cred_cache;
 /* Defined here because we initialize it below, but it is used in
 ** mvfs_linux_sops.c
 */
@@ -1916,52 +1915,19 @@ vnlayer_groups_task_to_cred(
     struct task_struct *task
 )
 {
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,32)
     register int i;
 
     cred->cr_ngroups = LINUX_TASK_NGROUPS(task);
-    for (i = 0; i < MIN(cred->cr_ngroups, MDKI_NGROUPS); i++) {
-        cred->cr_groups[i] = LINUX_TASK_GROUPS(task)[i];
+    for (i = 0; i < cred->cr_ngroups; i++) {
+        cred->cr_groups[i] = GROUP_AT(LINUX_TASK_GROUPS(task),i);
     }
-    /* be clean and zap the rest of the array (if any) */
-    for (; i < MDKI_NGROUPS; i++) {
-        cred->cr_groups[i] = 0;
-    }
-#else
-    struct cred *task_cred;
-    struct group_info *gi_p;
-    int i;
-
-    task_cred = prepare_kernel_cred(task);
-    if (task_cred) {
-        gi_p = get_group_info(task_cred->group_info);
-        put_cred(task_cred);
-        cred->cr_ngroups = MIN(gi_p->ngroups, MDKI_NGROUPS);
-        for (i = 0; i < cred->cr_ngroups; i++) {
-            cred->cr_groups[i] =  gi_p->blocks[0][i];
-        }
-        /* be clean and zap the rest of the array (if any) */
-        for (; i < MDKI_NGROUPS; i++) {
-            cred->cr_groups[i] = 0;
-        }
-        put_group_info(gi_p);
-    } else {
-        /* not enough memory? Can't do anything but log the error */
-        MDKI_VFS_LOG(VFS_LOG_ERR, "%s: prepare_kernel_cred returned NULL\n",
-                     __func__)
-        /* clean stale data */
-        for (i = 0; i < MDKI_NGROUPS; i++) {
-                cred->cr_groups[i] = 0;
-        }
-    }
-#endif
 }
 
 /*
  * mdki_dup_default_creds
  *
  * This function will create a new cred structure and copy the current
- * cred data from te task structure.
+ * cred data from the task structure.
  */
 
 extern CRED_T *
@@ -1976,8 +1942,11 @@ mdki_dup_default_creds(
 )
 {
     CRED_T *cred;
+    int grpcnt;
 
-    if ((cred = kmem_cache_alloc(vnlayer_cred_cache, GFP_KERNEL)) != NULL) {
+    grpcnt = LINUX_TASK_NGROUPS(current);
+    cred = KMEM_ALLOC((sizeof(CRED_T) + (grpcnt * sizeof(gid_t))), KM_SLEEP);
+    if (cred != NULL) {
         atomic_set(&cred->cr_ref, 1);   /* One user for now */
         cred->cr_euid = MDKI_GET_CURRENT_EUID();
         cred->cr_egid = MDKI_GET_CURRENT_EGID();
@@ -2008,13 +1977,8 @@ mdki_crdup(
 {
     CRED_T *new_cred;
 
-    if ((new_cred = kmem_cache_alloc(vnlayer_cred_cache, GFP_KERNEL)) != NULL) {
-        /* Our caller must have a ref for the original cred, so it won't go
-        ** away during this copy.  Also, I guess nobody else can be changing
-        ** it, which might make the copy inconsistent (at least we didn't worry
-        ** about it before).  The new cred only has one ref.
-        */
-        BCOPY(cred, new_cred, sizeof(CRED_T));
+    if ((new_cred = KMEM_ALLOC(MDKI_CR_SIZE(cred), KM_SLEEP)) != NULL) {
+        BCOPY(cred, new_cred, MDKI_CR_SIZE(cred));    
         atomic_set(&new_cred->cr_ref, 1);
     }
     MDKI_TRACE(TRACE_CREDS,"crdup %p (%d/%d) => %p from %s:%s:%d\n",
@@ -2058,7 +2022,7 @@ mdki_crfree(
         ** defined to do (the equivalent of) memory barriers before and after
         ** so all CPUs will see the same count.
         */
-        kmem_cache_free(vnlayer_cred_cache, cred);
+        KMEM_FREE(cred, MDKI_CR_SIZE(cred));
     }
 }
 
@@ -2356,7 +2320,6 @@ vnlayer_check_types(void)
  * prior to 2.6, the kmem cache name is limited to 19 bytes, including
  * terminator, so make sure these names (plus suffix) fit.
  */
-STATIC char vnlayer_cred_cache_name[]   = "vn_cred" SUFFIX;
 STATIC char vnlayer_vnode_cache_name[]  = "vn_vnode" SUFFIX;
 
 STATIC char *
@@ -2553,7 +2516,6 @@ enum err_state {
     REGISTERED_BLKDEV,
     REGISTERED_FILESYS,
     CALLED_MKDEV,
-    CALLED_CRED_CACHE_CREATE,
     CALLED_VNODE_CACHE_CREATE,
     INITIALIZED_MVFS,
     DONE_EVERYTHING
@@ -2568,8 +2530,6 @@ vnlayer_cleanup_vnode(enum err_state init_state)
         cleanup_mvfs_module();
       case CALLED_VNODE_CACHE_CREATE:
         kmem_cache_destroy(vnlayer_vnode_cache);
-      case CALLED_CRED_CACHE_CREATE:
-        kmem_cache_destroy(vnlayer_cred_cache);
       case CALLED_MKDEV:
         mvfs_unlink_dev_file();
       case REGISTERED_FILESYS:
@@ -2627,28 +2587,6 @@ init_module(void)
     if (err != 0)
         goto cleanup;
     init_state = CALLED_MKDEV;
-
-    name = encode_epoch_suffix(cred);
-    if (name == NULL)
-        err = -EINVAL;
-    else {
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,24)
-        vnlayer_cred_cache =
-            kmem_cache_create(name,
-                              sizeof(CRED_T),
-                              0, 0, NULL, NULL);
-#else
-        vnlayer_cred_cache =
-            kmem_cache_create(name,
-                              sizeof(CRED_T),
-                              0, 0, NULL);
-#endif
-        if (vnlayer_cred_cache == NULL)
-            err = -ENOMEM;
-    }
-    if (err != 0)
-        goto cleanup;
-    init_state = CALLED_CRED_CACHE_CREATE;
 
     name = encode_epoch_suffix(vnode);
     if (name == NULL)
@@ -2800,4 +2738,4 @@ mdki_linux_free_substitute_cred(
     KMEM_FREE(cd, sizeof(*cd));
 }
 
-static const char vnode_verid_mvfs_linux_mdki_c[] = "$Id:  215d37ac.065811e2.940a.00:01:84:c3:8a:52 $";
+static const char vnode_verid_mvfs_linux_mdki_c[] = "$Id:  c1098334.009911e3.8267.00:01:84:c3:8a:52 $";

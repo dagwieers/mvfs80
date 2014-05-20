@@ -1,4 +1,4 @@
-/* * (C) Copyright IBM Corporation 1991, 2012. */
+/* * (C) Copyright IBM Corporation 1991, 2013. */
 /*
  This program is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License as published by
@@ -25,27 +25,40 @@
 #include "mvfs_systm.h"
 #include "mvfs.h"
 
-STATIC void mvfs_procinherit_copy(P1(mvfs_proc_t *to)
-				  PN(mvfs_proc_t *from));
-STATIC mvfs_proc_t * mvfs_myproc(P_NONE);
-STATIC mvfs_thread_t * mvfs_threadalloc(P1(MVFS_THREADID_T *thrid));
+STATIC void mvfs_procinherit_copy(
+  mvfs_proc_t *to,
+  mvfs_proc_t *from
+);
+STATIC mvfs_proc_t* mvfs_myproc(MVFS_THREADID_T tid);
+STATIC mvfs_thread_t * mvfs_threadalloc(MVFS_THREADID_T *thrid);
 STATIC void mvfs_threadfree(mvfs_thread_t *thr, tbs_boolean_t needs_dequeue);
 STATIC void mvfs_threadrele(mvfs_thread_t *thr);
 STATIC void mvfs_threadrele_subr(mvfs_thread_t *thr);
-STATIC mvfs_proc_t * mvfs_procalloc(P1(MVFS_PROCID_T *procid)
-				    PN(MVFS_PROCTAG_T *proctag));
-STATIC void mvfs_procfree(P1(mvfs_proc_t *) PN(mvfs_thread_t *));
-STATIC void mvfs_procfree_int(P1(mvfs_proc_t *));
-STATIC void mvfs_procrele(P1(mvfs_proc_t *) PN(mvfs_thread_t *));
-STATIC void mvfs_snapshot_thread(P1(mvfs_thread_t *thr));
-STATIC int mvfs_purgechain(P1(int bucket) PN(int purge)
-			   PN(mvfs_thread_t *mythread));
+STATIC mvfs_proc_t * mvfs_procalloc(
+  MVFS_PROCID_T *procid,
+  MVFS_PROCTAG_T *proctag
+);
+STATIC void mvfs_procfree(
+  mvfs_proc_t *, 
+  mvfs_thread_t *
+);
+STATIC void mvfs_procfree_int(mvfs_proc_t *);
+STATIC void mvfs_procrele(
+  mvfs_proc_t *, 
+  mvfs_thread_t *
+);
+STATIC void mvfs_snapshot_thread(mvfs_thread_t *thr);
+STATIC int mvfs_purgechain(
+  int bucket, 
+  int purge,
+  mvfs_thread_t *mythread
+);
 STATIC void mvfs_procpurge_afps(P_NONE);
 STATIC unsigned int mvfs_pidhash(MVFS_PROCID_T *pidp);
-STATIC mvfs_thread_t *mvfs_mythread_subr(void);
+STATIC mvfs_thread_t *mvfs_mythread_subr(MVFS_THREADID_T *threadid_in);
 
 #ifdef MVFS_USE_SPLIT_ORDERED_HASH
-STATIC mvfs_thread_t *mvfs_mythread_subr_sohash(void);
+STATIC mvfs_thread_t *mvfs_mythread_subr_sohash(MVFS_THREADID_T *threadid_in);
 STATIC void mvfs_threadrele_subr_sohash(mvfs_thread_t *thr);
 EXTERN SOHASH_KEY_T mvfs_thr_sohash_get_key(void *mth);
 EXTERN void mvfs_thr_sohash_free_thread(void *thr);
@@ -435,7 +448,7 @@ mvfs_procdata_free()
 
     mvfs_procpurge_afps();
 
-    mythread = mvfs_mythread();
+    mythread = mvfs_mythread(NULL);
 
     mvfs_procpurge(MVFS_PROCPURGE_FLUSH);
 
@@ -464,7 +477,6 @@ mvfs_procdata_free()
 #else
     KMEM_FREE(mcdp->proc_thr.mvfs_threadid_hashtable,
               sizeof(mvfs_thread_t *)*MVFS_THREADHASH_SZ(mcdp));
-
     mvfs_splock_pool_free(&(mcdp->proc_thr.mvfs_threadid_spl_pool));
 #endif /* MVFS_USE_SPLIT_ORDERED_HASH */
 
@@ -607,7 +619,7 @@ repurge:
         MVFS_UNLOCK(&mpchase->mp_lock);
 #endif
         if (purge == MVFS_PROCPURGE_FLUSH ||
-            !MVFS_PROCVALID(mpchase)) {
+            !MVFS_PROCVALID(mpchase, mythread)) {
             MDB_XLOG((MDB_PROCOPS,
                      "purge: (pid not found) mp=%"KS_FMT_PTR_T", pid=%"MVFS_FMT_PROCID_T_D",tag=%d\n",
                       mpchase,mpchase->mp_procid, mpchase->mp_proctag)); 
@@ -663,7 +675,7 @@ int slp;
     int rescan, relocked;
     register mvfs_proc_t *mp;
     SPL_T s;
-    mvfs_thread_t *mythread = mvfs_mythread();
+    mvfs_thread_t *mythread = mvfs_mythread(NULL);
     mvfs_common_data_t *mcdp = MDKI_COMMON_GET_DATAP();
 
     switch (slp) {
@@ -737,7 +749,6 @@ mvfs_procpurge_afps()
     int rescan, relocked;
     register mvfs_proc_t *mp, *mpchase;
     register mvfs_thread_t *thrchase;
-    SPL_T s;
     mvfs_thread_t *mythread;
     extern LOCK_T mfs_unload_lock;
     mvfs_common_data_t *mcdp = MDKI_COMMON_GET_DATAP();
@@ -746,8 +757,8 @@ mvfs_procpurge_afps()
      * we must only be called by the unloading thread.
      */
     ASSERT(ISLOCKEDBYME(&mfs_unload_lock));
-    mythread = mvfs_mythread();		/* force an allocate now,
-                                           in case we need it */
+    mythread = mvfs_mythread(NULL);	/* force an allocate now,
+                                        in case we need it */
 
     MVFS_LOCK(&(mcdp->proc_thr.mvfs_proclock));
     for (i=0, mp = mcdp->proc_thr.mvfs_procid_hashtable[0];
@@ -769,22 +780,23 @@ mvfs_procpurge_afps()
                  thrchase;
                  thrchase = thrchase->thr_next)
             {
-                if (thrchase->thr_afp) {
+                if (thrchase->thr_afp != NULL) {
                     mvfs_log(MFS_LOG_ERR,
                              "thread %"KS_FMT_PTR_T" still has audit ptr when "
                              "files unmounted?", thrchase);
 
                     MVFS_UNLOCK(&(mcdp->proc_thr.mvfs_proclock));
-                    /* may do some blocking on writes, etc. */
-                    /* these two lines are essentially mvfs_afprele_thr(),
-                       but for some other thread, not us. */
-                    /* We're also depending on the statement above that we're
-                    ** the last thread running so it's OK to access somebody
-                    ** else's thread without a lock.  Normally, we don't use
-                    ** locking to access thread data because the owning thread
-                    ** is the only one that is supposed to access it (see the
-                    ** big comment above).
-                    */
+                    /*
+                     * may do some blocking on writes, etc.
+                     * these two lines are essentially mvfs_afprele_thr(),
+                     * but for some other thread, not us.
+                     * We're also depending on the statement above that we're
+                     * the last thread running so it's OK to access somebody
+                     * else's thread whithout a lock. Normally, we don't use
+                     * locking to access thread data because the owning thread
+                     * is the only one that is suppose to access it (see the
+                     * big comment above).
+                     */
                     mvfs_afprele(thrchase->thr_afp, mythread);
                     thrchase->thr_afp = NULL;
                     MVFS_LOCK(&(mcdp->proc_thr.mvfs_proclock));
@@ -817,7 +829,7 @@ mvfs_proc_t *mp;
        looking for a parent with state to inherit from.  Limit
        this loop to a max just for extra safety. */
     parent = MDKI_PARENT_PROC(MDKI_CURPROC()); /* Start with parent (locked) */
-    MDKI_MYPROCID(&procid);
+    MDKI_MYPROCID(&procid, (MVFS_THREADID_T *)NULL);
     MDB_XLOG((MDB_PROCOPS,"inherit for %"MVFS_FMT_PROCID_T_D": parent %"KS_FMT_PTR_T"\n", MDKI_CURPID(), parent));
 
     while (parent) {
@@ -996,16 +1008,8 @@ mvfs_thr_sohash_on_delete(sohash_entry_t *thr_hashentry)
     mvfs_threadfree(thr, TRUE);
 }
 
-/* MVFS_MYTHREAD - find/create valid thread info for this process. 
- *	This routine always returns a valid thread info state (even if
- *	all reset) for this process.
- *
- *	This routine MUST NOT DISTURB the u-area in any of
- *	its activities, since it is called from page-fault
- *	code (or its equivalent).
- */
 STATIC mvfs_thread_t *
-mvfs_mythread_subr_sohash()
+mvfs_mythread_subr_sohash(MVFS_THREADID_T *threadid_in)
 {
     int error = 0;
     register mvfs_thread_t *mth;
@@ -1030,10 +1034,17 @@ mvfs_mythread_subr_sohash()
      * the current thread is a VM page push operation.
      */
     ASSERT(NOTLOCKEDBYME(&(mcdp->proc_thr.mvfs_proclock)));
-    BZERO(&threadid,sizeof(MVFS_THREADID_T));
-    MDKI_MYTHREADID(&threadid);
-    MDKI_MYPROCID(&mepid);
-    MDKI_MYPROCTAG(&metag, &mepid);
+    /*
+     * If no thread ID was passed as a paremeter, consider the current one.
+     */
+    if (threadid_in == NULL) {
+        BZERO(&threadid, sizeof(MVFS_THREADID_T));
+        MDKI_MYTHREADID(&threadid);
+    } else {
+        threadid = *threadid_in;
+    }
+    MDKI_MYPROCID(&mepid, &threadid);
+    MDKI_MYPROCTAG(&metag, &mepid, &threadid);
     
     thr_sohash_key = MDKI_THREAD_SOHASH_KEY(&threadid);
 
@@ -1093,10 +1104,11 @@ mvfs_mythread_subr_sohash()
              * thread created.  Use mthproc != NULL as an
              * indicator for later.
              */
-            if (MVFS_PROCVALID(mthproc)) mthproc = NULL;
+            if (MVFS_PROCVALID(mthproc,mth)) 
+                mthproc = NULL;
         }
-         
-	MVFS_UNLOCK(&(mcdp->proc_thr.mvfs_proclock));
+        
+    MVFS_UNLOCK(&(mcdp->proc_thr.mvfs_proclock));        
     }
 
     /* Allocating a new thread structure */
@@ -1104,8 +1116,8 @@ mvfs_mythread_subr_sohash()
     MDB_XLOG((MDB_PROCOPS,"pid %"MVFS_FMT_PROCID_T_D": alloc new thread %"KS_FMT_PTR_T"\n",
 			  mth->thr_proc->mp_procid, mth));
 #ifdef MVFS_DEBUG
-    MDKI_MYPROCID(&mepid);
-    MDKI_MYPROCTAG(&metag, &mepid);
+    MDKI_MYPROCID(&mepid,&threadid);
+    MDKI_MYPROCTAG(&metag, &mepid,&threadid);
     if (!(MDKI_PROC_EQ(mth->thr_proc, &mepid, &metag))) {
         mvfs_log(MFS_LOG_WARN,
 		 "mvfs_mythread: different procinfo  mthr 0x%x procid 0x%x "
@@ -1150,7 +1162,7 @@ mvfs_mythread_subr_sohash()
         MVFS_LOCK(&(mcdp->proc_thr.mvfs_proclock));
 
         if ((mthproc = mvfs_findproc(&mthpid, &mthproctag, NULL)) != NULL &&
-            !MVFS_PROCVALID(mthproc))
+            !MVFS_PROCVALID(mthproc,mth))
         {
             /*
              * unhash it first, then release it.  We don't use
@@ -1188,25 +1200,33 @@ mvfs_mythread_subr_sohash()
 }
 
 mvfs_thread_t *
-mvfs_mythread()
+mvfs_mythread(MVFS_THREADID_T *threadid_in)
 {
     if (mvfs_lockless_thrhash_enabled) {
-        return(mvfs_mythread_subr_sohash());
+        return(mvfs_mythread_subr_sohash(threadid_in));
     } else {
-        return(mvfs_mythread_subr());
+        return(mvfs_mythread_subr(threadid_in));
     }
 }
 #else  /* MVFS_USE_SPLIT_ORDERED_HASH is not defined */
 
 mvfs_thread_t *
-mvfs_mythread()
+mvfs_mythread(MVFS_THREADID_T *threadid_in)
 {
-    return(mvfs_mythread_subr());
+    return(mvfs_mythread_subr(threadid_in));
 }
 #endif /* MVFS_USE_SPLIT_ORDERED_HASH */
 
+/* MVFS_MYTHREAD - find/create valid thread info for this process. 
+ *	This routine always returns a valid thread info state (even if
+ *	all reset) for this process.
+ *
+ *	This routine MUST NOT DISTURB the u-area in any of
+ *	its activities, since it is called from page-fault
+ *	code (or its equivalent).
+ */
 STATIC mvfs_thread_t *
-mvfs_mythread_subr()
+mvfs_mythread_subr(MVFS_THREADID_T *threadid_in)
 {
     register mvfs_thread_t *mth;
     mvfs_proc_t *mproc;
@@ -1222,19 +1242,26 @@ mvfs_mythread_subr()
     mvfs_proc_t *mthproc = NULL;
     register mvfs_proc_t *mpchase, **mpp;
     mvfs_common_data_t *mcdp = MDKI_COMMON_GET_DATAP();
-    
+
     /*
-     * We must not hold the mvfs_proclock upon calling this function.
-     * If we do, then we block allocating a thread structure; doing so
-     * while holding that lock may result in a deadlock if, for example,
-     * the current thread is a VM page push operation.
-     */
+    * We must not hold the mvfs_proclock upon calling this function.
+    * If we do, then we block allocating a thread structure; doing so
+    * while holding that lock may result in a deadlock if, for example,
+    * the current thread is a VM page push operation.
+    */
     ASSERT(NOTLOCKEDBYME(&(mcdp->proc_thr.mvfs_proclock)));
-    BZERO(&threadid,sizeof(MVFS_THREADID_T));
-    MDKI_MYTHREADID(&threadid);
-    MDKI_MYPROCID(&mepid);
-    MDKI_MYPROCTAG(&metag, &mepid);
-    
+    /*
+     * If no thread ID was passed as a paremeter, consider the current one.
+     */
+    if (threadid_in == NULL) {
+        BZERO(&threadid,sizeof(MVFS_THREADID_T));
+        MDKI_MYTHREADID(&threadid);
+    } else {
+        threadid = *threadid_in;
+    }
+
+    MDKI_MYPROCID(&mepid, &threadid);
+    MDKI_MYPROCTAG(&metag, &mepid, &threadid);
     hashindex = MDKI_THREADHASH(&threadid, mcdp);
 
     THREADID_SPLOCK(hashindex, mcdp, &lockp, s);
@@ -1244,7 +1271,6 @@ mvfs_mythread_subr()
     {
         ASSERT(mth->thr_hashbucket == hashindex);
         if (MDKI_THREADID_EQ(&threadid, &mth->thr_threadid)) {
-
             foundrealthr = (MDKI_PROC_EQ(mth->thr_proc, &mepid, &metag));
 
             mthproctag = mth->thr_proc->mp_proctag;
@@ -1272,15 +1298,15 @@ mvfs_mythread_subr()
             if ((mthproc = mvfs_findproc(&mthpid, &mthproctag, NULL)) 
                   != NULL)
             {
-                mvfs_threadrele(mth);
                 /*
                  * If the process is dead, we also want to release the
                  * proc, but we can't do it until we get our own new
                  * thread created.  Use mthproc != NULL as an
                  * indicator for later.
                  */
-                if (MVFS_PROCVALID(mthproc))
+                if (MVFS_PROCVALID(mthproc, mth))
                     mthproc = NULL;
+                mvfs_threadrele(mth);
             }
             MVFS_UNLOCK(&(mcdp->proc_thr.mvfs_proclock));
             goto realloc;		/* we don't hold spinlock */
@@ -1304,8 +1330,8 @@ realloc:
     MDB_XLOG((MDB_PROCOPS,"pid %"MVFS_FMT_PROCID_T_D": alloc new thread %"KS_FMT_PTR_T"\n",
                           mth->thr_proc->mp_procid, mth));
 #ifdef MVFS_DEBUG
-    MDKI_MYPROCID(&mepid);
-    MDKI_MYPROCTAG(&metag, &mepid);
+    MDKI_MYPROCID(&mepid, &threadid);
+    MDKI_MYPROCTAG(&metag, &mepid, &threadid);
     if (!(MDKI_PROC_EQ(mth->thr_proc, &mepid, &metag)))
         mvfs_log(MFS_LOG_WARN,
                     "mvfs_mythread: different procinfo  mthr 0x%x procid 0x%x proctag 0x%x mprocid 0x%x mproctag 0x%x\n",
@@ -1326,7 +1352,7 @@ realloc:
         MVFS_LOCK(&(mcdp->proc_thr.mvfs_proclock));
 
         if ((mthproc = mvfs_findproc(&mthpid, &mthproctag, NULL)) != NULL &&
-            !MVFS_PROCVALID(mthproc))
+            !MVFS_PROCVALID(mthproc, mth))
         {
             /*
              * unhash it first, then release it.  We don't use
@@ -1358,7 +1384,7 @@ realloc:
             /* we have to drop proclock */
             MVFS_UNLOCK(&(mcdp->proc_thr.mvfs_proclock));
         }
-    }
+    }                  
     return mth;
 }
 
@@ -1366,21 +1392,20 @@ realloc:
  * Take a snapshot from the thread's related process.
  */
 STATIC void
-mvfs_snapshot_thread(thr)
-mvfs_thread_t *thr;
+mvfs_snapshot_thread(mvfs_thread_t *thr)
 {
     register mvfs_proc_t *proc = thr->thr_proc;
 
     ASSERT(proc != NULL);		/* just in case */
 
     mvfs_afprele_thr(thr);		/* it checks for NULL */
-        
+
     MVFS_LOCK(&proc->mp_lock);
     thr->thr_inherit = proc->mp_inherit;
-    if (thr->thr_afp)
+    if (thr->thr_afp != NULL)
         mfs_afphold(thr->thr_afp);
     MVFS_UNLOCK(&proc->mp_lock);
-    if (thr->thr_afp) {
+    if (thr->thr_afp != NULL) {
         /* pulled out here 'cuz we can't print with spinlock held */
         MDB_XLOG((MDB_AUDITF, "afphold: afp=%"KS_FMT_PTR_T" refcnt=%d pid=%"MVFS_FMT_PROCID_T_D"\n",
                               thr->thr_afp, thr->thr_afp->refcnt,
@@ -1390,29 +1415,131 @@ mvfs_thread_t *thr;
                            thr, thr->thr_proc));
 }
 
+#ifdef MVFS_HAS_DELAYED_PROCESSING
+
+/*
+ * This routine allocates and copy the data from the actual thread structure
+ * to the cloned one. Cloned thread will not be no the thread hash table and
+ * they will be freed as soon as mvfs_exit_fs() is called.
+ */
+mvfs_thread_t*
+mvfs_clone_thread(mvfs_thread_t *actual_thread)
+{
+    mvfs_thread_t *clone_thread = NULL;
+
+    ASSERT(actual_thread != NULL);
+
+    clone_thread = MVFS_THREAD_ALLOC();
+    BCOPY(actual_thread, clone_thread, sizeof(*actual_thread));
+
+    /*
+     * Since this thead is a cloned one, it will never be part of the hash
+     * table nor have a real activecount value. this structure will be freed
+     * as soon as mvfs_exit_fs is called.
+     */
+    clone_thread->thr_next = NULL;
+    clone_thread->thr_activecount = 0;
+    clone_thread->thr_hashbucket = 0;
+    clone_thread->thr_hashnxt = 0;
+    clone_thread->thr_cloned = 1;
+
+    if (clone_thread->thr_afp != NULL)
+        mfs_afphold(clone_thread->thr_afp);
+
+    return clone_thread;
+}
+
+/*
+ * This routine alocates a cloned thread in case the current one is not the
+ * actual one. Later this thread will be freed by mvfs_hdp_free_clone_thread.
+ */
+mvfs_thread_t*
+mvfs_hdp_get_clone_thread(mvfs_thread_t* actual_thread)
+{
+    register mvfs_thread_t *current_thread;
+    MVFS_THREADID_T current_tid;
+
+    MDKI_MYTHREADID(&current_tid);
+    if (!MDKI_THREADID_EQ(&actual_thread->thr_threadid, &current_tid))
+        current_thread = actual_thread;
+    else {
+        current_thread = mvfs_clone_thread(actual_thread);
+
+        /* Release the actual thread structure */
+        mvfs_exit_fs(actual_thread);
+    }
+    return current_thread;
+}
+
+/* 
+ * This routine checks whether a given thread is a cloned one and releases it
+ * if so. Cloned threads are not hold on hash table, but just freed instead.
+ */
+void
+mvfs_hdp_free_clone_thread(mvfs_thread_t* thr)
+{
+    /* Releases the afp if there is one. */
+    if (thr->thr_afp)
+        mvfs_afprele_thr(thr);
+
+    MVFS_THREAD_FREE(thr);
+}
+
+#endif
+
 /*
  * Find thread via mfs_mythread().  Increment count and copy state if
  * appropriate.
+ * There are two different flavors of mvfs_enter_fs depending on whether
+ * the platform in question supports deferred IO.  If it does, then this
+ * function needs to have a tid passed in because the current thread
+ * might be a system thread and not the one that initiated the work, so
+ * we need to find get the original thread to maintain proper view context
+ * and to maintain proper auditing.
+ * This will work because with the call data changes, the only places
+ * that call mvfs_enter_fs without a macro are in machine dependent code.
  */
+
+#if defined MVFS_HAS_DELAYED_PROCESSING
 mvfs_thread_t *
-mvfs_enter_fs()
+mvfs_enter_fs(MVFS_THREADID_T actual_tid)
 {
-    register mvfs_thread_t *rthread;
+    SPL_T s;
+#else
+mvfs_thread_t *
+mvfs_enter_fs(void)
+{
+    MVFS_THREADID_T *actual_tid = NULL;
+#endif
+    register mvfs_thread_t *actual_thread;
+    int activecount;
+
 #if defined(MVFS_DEBUG) || defined(DEBUG_PERF)
     timestruc_t stime;	/* For statistics */
     timestruc_t dtime;
 
     MDKI_HRTIME(&stime);	/* Fetch start time for stats */
 #endif
-    rthread = MVFS_MDEP_ENTER_FS();
-    if (rthread->thr_activecount++ == 0) {
+    actual_thread = MVFS_MDEP_ENTER_FS(actual_tid);
+
+    MVFS_HDP_LOCK_THR(actual_thread->thr_lock, s);
+    activecount = actual_thread->thr_activecount++;
+    MVFS_HDP_UNLOCK_THR(actual_thread->thr_lock, s);
+
+    if (activecount == 0) {
         /* first activation */
-        mvfs_snapshot_thread(rthread);
+        mvfs_snapshot_thread(actual_thread);
+
+        MVFS_SET_SIP(&actual_thread->thr_sip);
+    } else {
+        MVFS_WAIT_SIP(&actual_thread->thr_sip);
     }
+
 #if defined(MVFS_DEBUG) || defined(DEBUG_PERF)
     MVFS_BUMPTIME(stime, dtime, mfs_clntstat.mvfsthread_time);
 #endif
-    return rthread;
+
+    return MVFS_HDP_GET_CLONE_THREAD(actual_thread);
 }
 
 /*
@@ -1423,23 +1550,36 @@ mvfs_exit_fs(thr)
 register mvfs_thread_t *thr;
 {
     register mvfs_thread_t *rthread;
+    int activecount;
+#ifdef MVFS_HAS_DELAYED_PROCESSING
+    SPL_T s;
+#endif
 #if defined(MVFS_DEBUG) || defined(DEBUG_PERF)
     timestruc_t stime;	/* For statistics */
     timestruc_t dtime;
 
     MDKI_HRTIME(&stime);	/* Fetch start time for stats */
 #endif
-    
-    MVFS_MDEP_EXIT_FS(thr);
-        
-    if (--thr->thr_activecount == 0) {
-        ASSERT(thr->thr_rebindinh == 0);
-        ASSERT(thr->thr_auditinh == 0);
-        BZERO(thr->thr_errstr, sizeof(thr->thr_errstr));
-        if (thr->thr_afp)
-            mvfs_afprele_thr(thr);
-        BZERO(&thr->thr_inherit, sizeof(thr->thr_inherit));
-        MVFS_DUMMY_RELE(thr);
+
+    if (thr->thr_cloned)
+        MVFS_HDP_FREE_CLONE_THREAD(thr);
+    else {
+        MVFS_MDEP_EXIT_FS(thr);
+
+        MVFS_HDP_LOCK_THR(thr->thr_lock, s);
+        activecount = --thr->thr_activecount;
+        MVFS_HDP_UNLOCK_THR(thr->thr_lock, s);
+
+        if (activecount == 0) {
+            MVFS_CLEAR_SIP(&thr->thr_sip);
+            ASSERT(thr->thr_rebindinh == 0);
+            ASSERT(thr->thr_auditinh == 0);
+            BZERO(thr->thr_errstr, sizeof(thr->thr_errstr));
+            if (thr->thr_afp)
+                mvfs_afprele_thr(thr);
+            BZERO(&thr->thr_inherit, sizeof(thr->thr_inherit));
+            MVFS_DUMMY_RELE(thr);
+        }
     }
 #if defined(MVFS_DEBUG) || defined(DEBUG_PERF)
     MVFS_BUMPTIME(stime, dtime, mfs_clntstat.mvfsthread_time);
@@ -1458,15 +1598,16 @@ register mvfs_thread_t *thr;
     mfs_auditfile_t *afp;
 
     ASSERT(proc != NULL);
-    
-    if (thr->thr_afp)
-        mfs_afphold(thr->thr_afp);		/* for extra ref */
-    if (thr->thr_afp) {
+
+    if (thr->thr_afp != NULL) {
+        mfs_afphold(thr->thr_afp);    /* for extra ref */
+
         /* pulled out here 'cuz we can't print with spinlock held */
         MDB_XLOG((MDB_AUDITF, "afphold: afp=%"KS_FMT_PTR_T" refcnt=%d pid=%"MVFS_FMT_PROCID_T_D"\n",
                               thr->thr_afp, thr->thr_afp->refcnt,
                               MDKI_CURPID()));
     }
+
     MVFS_LOCK(&proc->mp_lock);
     afp = proc->mp_afp;
     proc->mp_afp = NULL;
@@ -1477,7 +1618,7 @@ register mvfs_thread_t *thr;
      * drop the afp we zapped, but do it outside the spinlock to avoid
      * locking delays.
      */
-    if (afp)
+    if (afp != NULL)
         mvfs_afprele(afp, thr);
 }
 
@@ -1532,8 +1673,13 @@ MVFS_THREADID_T *thrid;
      * thread, for the moment.
      */
 
-        thr = MVFS_THREAD_ALLOC();
+    thr = MVFS_THREAD_ALLOC();
     BZERO(thr, sizeof(*thr));
+
+#ifdef MVFS_HAS_DELAYED_PROCESSING
+    INITSPLOCK(thr->thr_lock, "mvfs_thread_spl");
+    MVFS_INIT_SIP(&thr->thr_sip);
+#endif
 
     SPLOCK(mcdp->proc_thr.mvfs_proc_alloclock, s);
     mcdp->proc_thr.mvfs_nthr_alloced++;
@@ -1545,7 +1691,7 @@ MVFS_THREADID_T *thrid;
      * which are exiting, i.e. if pid is p0 or zsched. These follow a
      * different procedure for being cleaned up later.
      */
-    proc = mvfs_myproc();
+    proc = mvfs_myproc(*thrid);
 
     thr->thr_threadid = *thrid;
     MVFS_LOCK(&proc->mp_lock);
@@ -1693,8 +1839,7 @@ mvfs_threadrele(mvfs_thread_t *thr)
 #endif /* MVFS_USE_SPLIT_ORDERED_HASH */
 
 STATIC void
-mvfs_threadrele_subr(thr)
-mvfs_thread_t *thr;
+mvfs_threadrele_subr(mvfs_thread_t *thr)
 {
     register mvfs_thread_t **mthp, *mtchase;
     SPL_T s;
@@ -1714,7 +1859,7 @@ mvfs_thread_t *thr;
      */
     for (mtchase = *mthp;
          mtchase;
-         mthp = &mtchase->thr_hashnxt, mtchase = mtchase->thr_hashnxt) 
+         mthp = &mtchase->thr_hashnxt, mtchase = mtchase->thr_hashnxt)
     {
         if (thr == mtchase) {
             *mthp = thr->thr_hashnxt;
@@ -1894,7 +2039,7 @@ register unsigned int *hashp;
  */
 
 STATIC mvfs_proc_t *
-mvfs_myproc()
+mvfs_myproc(MVFS_THREADID_T tid)
 {
     register mvfs_proc_t *mp, *newmp;
     unsigned int hashindex;
@@ -1902,8 +2047,8 @@ mvfs_myproc()
     MVFS_PROCTAG_T proctag;
     mvfs_common_data_t *mcdp = MDKI_COMMON_GET_DATAP();
 
-    MDKI_MYPROCID(&procid);
-    MDKI_MYPROCTAG(&proctag, &procid);
+    MDKI_MYPROCID(&procid, &tid);
+    MDKI_MYPROCTAG(&proctag, &procid, &tid);
 
     hashindex = mvfs_pidhash(&procid);
     
@@ -1975,4 +2120,4 @@ mvfs_proc_t *proc;
 }
 #endif
 
-static const char vnode_verid_mvfs_procops_c[] = "$Id:  8a2aceec.f14111e1.9c93.00:01:84:c3:8a:52 $";
+static const char vnode_verid_mvfs_procops_c[] = "$Id:  4ff787ac.f8d640a0.b683.36:31:d6:35:df:93 $";

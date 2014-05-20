@@ -1,7 +1,7 @@
 #ifndef MVFS_MDKI_H_
 #define MVFS_MDKI_H_
 /*
- * Copyright (C) 1999, 2012 IBM Corporation.
+ * Copyright (C) 1999, 2013 IBM Corporation.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -30,6 +30,11 @@
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,24) 
 #include <linux/exportfs.h>
 #include <linux/hash.h>
+#endif
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,32)
+#include <linux/sched.h>
+#else
+#include <linux/cred.h>
 #endif
 
 
@@ -589,9 +594,15 @@ mdki_invalidate_vnode_pages(VNODE_T *vp);
 /* Linux doesn't have a real cred structure.  They have file system
  * creds stored in the task structure.  We will make our own structure
  * and fill it in as needed.
+ * Actually as of the 2.6.32 kernel, it has a cred structure but we still
+ * have problems if we use it because it contains pointers to sub-structures
+ * like the group_info structure which also have counters in them.  Some of
+ * these substructures do not provide easy accessor functions for us to use.
+ * So to keep from artificially elevating counts, and possible causing them
+ * to wrap if we cache them in a long lived mnode, we still make our own copy.
+ * in the mnode without worry.
  */
 
-#define MDKI_NGROUPS 32                 /* big enough to handle Linux group lists */
 typedef struct vnode_cred {
         atomic_t cr_ref;            /* reference count */
         uid_t   cr_euid;            /* effective user id */
@@ -603,10 +614,17 @@ typedef struct vnode_cred {
         uid_t   cr_fsuid;           /* file system user id */
         gid_t   cr_fsgid;           /* file system group id */
         unsigned int cr_ngroups;        /* number of groups in cr_groups */
-        gid_t   cr_groups[MDKI_NGROUPS]; /* supplementary group list */
+        gid_t   cr_groups[0];   
 } vnode_cred_t;
 
 #define CRED_T  vnode_cred_t
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,32)
+/* Starting in the 2.6.32 kernel, Linux does have it's own cred structure
+ * so provide a definition to use when we need to point to it
+ */
+#define SYS_CRED_T struct cred
+#endif
+
 #define CRED_UID_T uid_t
 #define CRED_GID_T gid_t
 
@@ -674,14 +692,11 @@ mdki_crhold(CRED_T *cred);
 #define MDKI_CR_SET_E2RUID(c)   (c)->cr_fsuid = (c)->cr_ruid
 #define MDKI_CR_SET_E2ROOTUID(c) (c)->cr_fsuid = MDKI_ROOT_UID
 #define MDKI_CR_IS_ROOT(c)      ((c)->cr_fsuid == MDKI_ROOT_UID)
-/* FIXME:  There is a potential buffer overrun problem here if we ever
- * create a cred with less than the full cr_groups array.  So far we
- * don't so it's not a problem, but we have to keep this in mind.
- */
-#define MDKI_CR_EQUAL(c1,c2)                                    \
-  (BCMP(&(c1)->cr_euid, &(c2)->cr_euid,                         \
-       (caddr_t)&(c1)->cr_groups - (caddr_t)&(c1)->cr_euid +    \
-       ((c1)->cr_ngroups)*sizeof((c1)->cr_groups[0])) == 0)
+#define MDKI_CR_SIZE(c) (sizeof(CRED_T) + ((c)->cr_ngroups * sizeof(gid_t)))
+#define MDKI_CR_EQUAL(c1,c2)                 \
+  (((c1)->cr_ngroups == (c2)->cr_ngroups) && \
+   (BCMP(&(c1)->cr_euid, &(c2)->cr_euid,     \
+    (MDKI_CR_SIZE(c1) - sizeof((c1)->cr_ref))) == 0))
 
 #define MDKI_ROOT_UID   0
 #define MDKI_ROOT_GID   0
@@ -1371,7 +1386,7 @@ mdki_file_ctx_open_for_lfs(
 struct mvfs_thread;
 
 typedef struct mvfs_call_data {
-    vnode_cred_t *cred;
+    CRED_T *cred;
     struct mvfs_thread *thr;
 } mvfs_call_data_t;
 
@@ -1395,6 +1410,31 @@ mdki_linux_free_substitute_cred(
 
 #define MVFS_ALLOC_SUBSTITUTE_CRED(CD,CR) mdki_linux_make_substitute_cred(CD,CR)
 #define MVFS_FREE_SUBSTITUTE_CRED(CD) mdki_linux_free_substitute_cred(CD)
+
+/*
+ * MVFS_INIT_TEMP_CD is used when we need a short lived call data structure.
+ * It is used most often in cases such as logging and auditing where there
+ * are creds cached for use with the file in question.
+ */
+#define MVFS_INIT_TEMP_CD(CDP, CR, MTH) { \
+    (CDP)->cred = CR; \
+    (CDP)->thr = MTH; \
+}
+
+#define MVFS_CD_SET_CRED(CDP, CR) {\
+    (CDP)->cred = (CR);\
+    if (MVFS_CD2CRED(CDP))\
+        MDKI_CRHOLD(MVFS_CD2CRED(CDP));\
+}
+
+#define MVFS_CD_UNSET_CRED(CDP) {\
+    if (MVFS_CD2CRED(CDP)) {\
+        MDKI_CRFREE(MVFS_CD2CRED(CDP));\
+        (CDP)->cred = NULL;\
+    }\
+}
+
+#define MVFS_SUBSTITUTE_CRED_IS_VALID(CDP) ((CDP) != NULL)
 
 /* Declare functions that will manipulate the thread structure when
  * initializing and releasing call data structures.
@@ -1470,4 +1510,4 @@ extern u_int mvfs_view_shift_bits;
 #endif
 
 #endif /* MVFS_MDKI_H_ */
-/* $Id: 20ad3764.065811e2.940a.00:01:84:c3:8a:52 $ */
+/* $Id: 4928d49d.f5a240e5.bf80.ff:a9:1f:d0:d3:5e $ */

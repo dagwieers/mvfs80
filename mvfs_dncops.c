@@ -1,4 +1,4 @@
-/* * (C) Copyright IBM Corporation 1991, 2010. */
+/* * (C) Copyright IBM Corporation 1991, 2013. */
 /*
  This program is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License as published by
@@ -223,7 +223,7 @@ mvfs_dncadd_subr(
     VTYPE_T type,
     struct timeval *evtp,
     int hash,
-    CRED_T *cred
+    CALL_DATA_T *cd
 );
 
 STATIC void 
@@ -244,8 +244,11 @@ mvfs_dnclookup_subr(
 );
 
 STATIC int 
-mvfs_dncflush_subr(VFS_T *vfsp);
-            
+mvfs_dncflush_subr(
+    VFS_T *vfsp,
+    CALL_DATA_T *cd
+);
+
 STATIC void 
 mfs_dncbhadd(
     mfs_dncent_t *dnp,
@@ -267,7 +270,10 @@ mfs_dnc_nullbhcheck(
     mvfs_thread_t *mth
 );
 STATIC void 
-mfs_dncrele(struct mfs_dncent *dnp);
+mfs_dncrele(
+    struct mfs_dncent *dnp,
+    CALL_DATA_T *cd
+);
 STATIC u_long 
 mfs_namehash(
     char *nm,
@@ -379,7 +385,7 @@ mvfs_dnlc_data_t mvfs_dnlc_data_var;
 
 #define DNC_BUMPVW(vw, stat) \
         if (vw) {       \
-           BUMP_PVSTAT(vw, dncstat.stat); \
+           BUMP_PVDNCSTAT(vw, dncstat.stat); \
         }       \
         BUMPSTAT(mfs_dncstat.stat);
 
@@ -391,13 +397,14 @@ mvfs_dnlc_data_t mvfs_dnlc_data_var;
  * declaration.
  */
 #define DNC_BUMPVW_2(vw, stat1, stat2) { \
-        if (vw) { \
+        mvfs_common_data_t *mcdp = MDKI_COMMON_GET_DATAP(); \
+        if ((mcdp->mvfs_pview_stat_enabled == TRUE) && vw) { \
            SPL_T _ss; \
            struct mvfs_pvstat *pvp = VTOM(vw)->mn_view.pvstat; \
-           MVFS_PVSTATLOCK_LOCK(_ss, pvp); \
-           BUMP_PVSTAT_LOCKED(pvp, dncstat.stat1); \
-           BUMP_PVSTAT_LOCKED(pvp, dncstat.stat2); \
-           MVFS_PVSTATLOCK_UNLOCK(_ss, pvp); \
+           MVFS_PVDNC_STATLOCK_LOCK(_ss, pvp); \
+           BUMP_PVDNCSTAT_LOCKED(pvp, dncstat.stat1); \
+           BUMP_PVDNCSTAT_LOCKED(pvp, dncstat.stat2); \
+           MVFS_PVDNC_STATLOCK_UNLOCK(_ss, pvp); \
         } \
         BUMPSTAT(mfs_dncstat.stat1); \
         BUMPSTAT(mfs_dncstat.stat2); \
@@ -644,7 +651,8 @@ nclockfree:
 
 int
 mvfs_dnc_setcaches(
-    mvfs_cache_sizes_t *szp
+    mvfs_cache_sizes_t *szp,
+    CALL_DATA_T *cd
 )
 {
     register mvfs_dnlc_data_t *ncdp = MDKI_DNLC_GET_DATAP();
@@ -695,7 +703,7 @@ mvfs_dnc_setcaches(
      * (no new lookups in progress--processes can still have current
      * directories or open files within the MVFS.)
      */
-    rval = mvfs_dncflush_subr(NULL);
+    rval = mvfs_dncflush_subr(NULL, cd);
     if (rval == -1 || ncdp->mvfs_old_dnc != 0) {
 	KMEM_FREE(new_mvfs_dnc, new_mvfs_dncmax*sizeof(struct mfs_dncent));
 	MDB_XLOG((MDB_DNC_REALLOC, "EBUSY\n"));
@@ -824,7 +832,8 @@ mvfs_dncfree()
 
 int
 mfs_dnc_getent(
-    struct mfs_ioncent *ncp
+    struct mfs_ioncent *ncp,
+    CALL_DATA_T *cd
 )
 {
     mvfs_dnlc_data_t *ncdp = MDKI_DNLC_GET_DATAP();
@@ -882,7 +891,7 @@ mfs_dnc_getent(
                     
     ncp->addtime = dncentp->addtime;
 
-    error = mfs_copyout_viewtag(FALSE, ncp->dvw, dncentp->dvw);
+    error = mfs_copyout_viewtag(FALSE, ncp->dvw, dncentp->dvw, cd);
     if (error) goto cleanup;
 
     ASSERT(dncentp->vfsp);
@@ -916,7 +925,7 @@ mfs_dnc_getent(
 	ncp->bhlist[i] = dncentp->bh[i];
     }
 
-    error = mfs_copyout_viewtag(FALSE, ncp->vw, dncentp->vvw);
+    error = mfs_copyout_viewtag(FALSE, ncp->vw, dncentp->vvw, cd);
     if (error) goto cleanup;
 
     ncp->fid.dbid = dncentp->vfid.mf_dbid;
@@ -970,12 +979,15 @@ mfs_namehash(
  */
 
 STATIC void
-mfs_dncrele( register struct mfs_dncent *dnp)
+mfs_dncrele(
+    register struct mfs_dncent *dnp,
+    register CALL_DATA_T *cd
+)
 {
     ASSERT(dnp->in_trans);
-    if (dnp->dvw != NULL) VN_RELE(dnp->dvw);
+    if (dnp->dvw != NULL) ATRIA_VN_RELE(dnp->dvw, cd);
     dnp->dvw  = NULL;
-    if (dnp->vvw != NULL) VN_RELE(dnp->vvw);
+    if (dnp->vvw != NULL) ATRIA_VN_RELE(dnp->vvw, cd);
     dnp->vvw  = NULL;
     if (dnp->cred != NULL) MDKI_CRFREE(dnp->cred);
     dnp->cred = NULL;
@@ -994,7 +1006,7 @@ mfs_dncadd(
     u_int dnc_flags,
     register char *nm,
     VNODE_T *vp,
-    CRED_T *cred
+    CALL_DATA_T *cd
 )
 {
     mvfs_dnlc_data_t *ncdp = MDKI_DNLC_GET_DATAP();
@@ -1049,7 +1061,7 @@ mfs_dncadd(
     mvfs_dncadd_subr(dvp, vp ? MFS_VIEW(vp) : NULL,
 		     dnc_flags, nm, len, &vfid,
 		     (VTYPE_T) (vp ? MVFS_GETVTYPE(vp) : VNON), &vevtime,
-		     hash, cred);
+		     hash, cd);
 }
 
 STATIC void MVFS_NOINLINE
@@ -1063,7 +1075,7 @@ mvfs_dncadd_subr(
     VTYPE_T type,
     struct timeval *evtp,
     register int hash,
-    CRED_T *cred
+    CALL_DATA_T *cd
 )
 {
     register mvfs_dnlc_data_t *ncdp = MDKI_DNLC_GET_DATAP();
@@ -1074,7 +1086,7 @@ mvfs_dncadd_subr(
     mfs_fid_t dvfid;
     VNODE_T *dvw, *stvw;
     VFS_T *dvfsp;
-    register mvfs_thread_t *mth = mvfs_mythread();
+    register mvfs_thread_t *mth = MVFS_MYTHREAD(cd);
     register int lru_hash; 
     int addbhinvar = 0;
     int addnoop = 0;
@@ -1125,7 +1137,7 @@ mvfs_dncadd_subr(
 
     stvw = MVFS_FLAGON(dnc_flags, MVFS_DNC_RVC_ENT) ? tvw : dvw;
     if ((dnp = mfs_dncfind(&dvfid, dvfsp, stvw,
-			   nm, len, FALSE, hash, cred))
+			   nm, len, FALSE, hash, MVFS_CD2CRED(cd)))
 	!= NULL)
     {
 	if (MFS_FIDEQ(*vfidp, dnp->vfid) && MFS_TVEQ(*evtp, dnp->vevtime)) {
@@ -1217,7 +1229,7 @@ mvfs_dncadd_subr(
                 NC_SPUNLOCK_LRU(dnp,sl);
                 NC_HASH_UNLOCK(hash_spl, sh, ncdp);
                 MVFS_RW_READ_UNLOCK(&(ncdp->mvfs_dnc_rwlock), srw);
-	        mfs_dncrele(dnp);
+	        mfs_dncrele(dnp, cd);
                 MVFS_RW_READ_LOCK(&(ncdp->mvfs_dnc_rwlock), srw);
                 NC_SPLOCK_LRU(dnp,sl);
 	        CLR_IN_TRANS(dnp,ncdp) {
@@ -1327,7 +1339,7 @@ get_lru:
 
     NC_HASH_UNLOCK(hash_spl, sh, ncdp);
     MVFS_RW_READ_UNLOCK(&(ncdp->mvfs_dnc_rwlock), srw);
-    mfs_dncrele(dnp);	/* Release vnodes etc. on entry */
+    mfs_dncrele(dnp, cd);	/* Release vnodes etc. on entry */
 
     /* Fill in the entry with the new stuff */
 
@@ -1370,8 +1382,8 @@ get_lru:
         dnp->nm_inline[MFS_DNMAXSHORTNAME-1] = '\0';
     }
 
-    dnp->cred = cred;
-    if (cred) MDKI_CRHOLD(cred);
+    dnp->cred = MVFS_CD2CRED(cd);
+    if (MVFS_CD2CRED(cd)) MDKI_CRHOLD(MVFS_CD2CRED(cd));
 
     /* 
      * Now insert on the new hash chains and at the end of
@@ -1657,7 +1669,7 @@ mfs_dnclookup(
 
 	mfs_dnc_invalvp(dvp);      /* Invalidate entries from dir */
 	MUNLOCK(VTOM(dvp));
-	if (vvw) VN_RELE(vvw);
+	if (vvw) ATRIA_VN_RELE(vvw, cd);
         DNC_BUMPVW_2(vw, dnc_misses, dnc_missdncgen);
 	return(NULL);
     }
@@ -1700,7 +1712,7 @@ mfs_dnclookup(
             return(MFS_DNC_ENOENTVP);
 	} else {
 	    MLOCK(VTOM(dvp));
-	    mfs_dncremove(dvp, nm, MVFS_CD2CRED(cd));	/* Flush translation */
+	    mfs_dncremove(dvp, nm, cd);	/* Flush translation */
 	    MUNLOCK(VTOM(dvp));
             DNC_BUMPVW_2(vw, dnc_misses, dnc_missnoenttimedout);
 	    return(NULL);
@@ -1712,10 +1724,10 @@ mfs_dnclookup(
      */
 
     error = mfs_getvnode(dvp->v_vfsp, vvw, &vfid, &vp, cd);
-    if (vvw) VN_RELE(vvw);		/* Not needed any more */
+    if (vvw) ATRIA_VN_RELE(vvw, cd);		/* Not needed any more */
     if (error) {			/* can't get it */
 	MLOCK(VTOM(dvp));
-	mfs_dncremove(dvp, nm, MVFS_CD2CRED(cd));	/* Flush translation */
+	mfs_dncremove(dvp, nm, cd);	/* Flush translation */
 	MUNLOCK(VTOM(dvp));
         DNC_BUMPVW_2(vw, dnc_misses, dnc_missnovp);
 	return (NULL);
@@ -1753,9 +1765,9 @@ mfs_dnclookup(
      */
 
     if (!mfs_evtime_valid(vp, &vevtime, cd)) {
-	VN_RELE(vp);	/* Can't trust this vnode, release it */
+	ATRIA_VN_RELE(vp, cd);	/* Can't trust this vnode, release it */
  	MLOCK(VTOM(dvp));
-	mfs_dncremove(dvp, nm, MVFS_CD2CRED(cd));	/* Flush translation */
+	mfs_dncremove(dvp, nm, cd);	/* Flush translation */
 	MUNLOCK(VTOM(dvp));
         DNC_BUMPVW_2(vw, dnc_misses, dnc_missevtime);
 	return(NULL);
@@ -1785,8 +1797,7 @@ mvfs_dnclookup_subr(
 )
 {
     SPL_T sl;
-    mvfs_thread_t *mth = MVFS_MYTHREAD(cd);
-
+    struct mvfs_thread *mth = MVFS_MYTHREAD(cd);
     /*
      * See if entry is marked as 'invalid'
      * We do this here so we can keep stats on name cache hits
@@ -1943,7 +1954,7 @@ mvfs_rvcenter(
     VNODE_T *vw,
     VNODE_T *vobrtvp,
     mfs_fid_t *fidp,
-    CRED_T *cred
+    CALL_DATA_T *cd
 )
 {
     mvfs_dnlc_data_t *ncdp = MDKI_DNLC_GET_DATAP();
@@ -1969,7 +1980,7 @@ mvfs_rvcenter(
     vevtime.tv_usec = 0;
 
     mvfs_dncadd_subr(V_TO_MMI(vobrtvp)->mmi_rootvp, vw, MVFS_DNC_RVC_ENT,
-		     ".", 1, fidp, VDIR, &vevtime, hash, cred);
+		     ".", 1, fidp, VDIR, &vevtime, hash, cd);
     return 0;
 }
 
@@ -2017,7 +2028,7 @@ mvfs_rvcflush(
     BUMPSTAT_VAL(mfs_rvcstat.rvc_purge, j);
     BUMPSTAT_VAL(mfs_dncstat.dnc_invalhits, j);
     if (vw) {
-       BUMP_PVSTAT_VAL(vw, dncstat.dnc_invalhits, j);
+       BUMP_PVDNCSTAT_VAL(vw, dncstat.dnc_invalhits, j);
     }
 }
 
@@ -2037,26 +2048,26 @@ int
 mfs_dncremove(
     register VNODE_T *dvp,
     register char *nm,
-    CRED_T *cred
+    CALL_DATA_T *cd
 )
 {
     char *xnm;
     int rval;
     
     if (mfs_hmname(nm, &xnm)) {
-	rval = mfs_dncremove_one(dvp, xnm, cred); /* remove natural name */
-	(void) mfs_dncremove_one(dvp, nm, cred); /* remove history mode name */
+	rval = mfs_dncremove_one(dvp, xnm, cd); /* remove natural name */
+	(void) mfs_dncremove_one(dvp, nm, cd); /* remove history mode name */
 	STRFREE(xnm);
     } else {
 	xnm = mfs_hmappend(nm);
-        rval = mfs_dncremove_one(dvp, nm, cred); /* remove natural name */
+        rval = mfs_dncremove_one(dvp, nm, cd); /* remove natural name */
 	if (xnm != NULL) {
 	    /* This may not be totally correct but I think it is the best that
 	     * we can do given the limited options for return values and the
 	     * fact that the existing code choses to ignore what happens to
 	     * the history mode name.
 	     */
-	    (void) mfs_dncremove_one(dvp, xnm, cred); /* remove history mode name */
+	    (void) mfs_dncremove_one(dvp, xnm, cd); /* remove history mode name */
 	    STRFREE(xnm);
 	}
     }
@@ -2074,7 +2085,7 @@ int
 mfs_dncremove_one(
     register VNODE_T *dvp,
     register char *nm,
-    CRED_T *cred
+    CALL_DATA_T *cd
 )
 {
     mvfs_dnlc_data_t *ncdp = MDKI_DNLC_GET_DATAP();
@@ -2164,7 +2175,7 @@ mfs_dncremove_one(
         NC_HASH_LOCK(rvchash, &hash_spl, sh, ncdp);
         if (dnp->lruhead == (mfs_dncent_t *)&(ncdp->mfs_dncdirlru) &&
             (rvnp = mfs_dncfind(&vobrtfid, dvfsp, vw, ".", 1, FALSE,
-                               rvchash, cred)) != NULL)
+                               rvchash, MVFS_CD2CRED(cd))) != NULL)
         {
             /* invalidate VOB root entry, if the same fid */
             if (MFS_FIDEQ(rvnp->vfid, namefid)) {
@@ -2176,7 +2187,7 @@ mfs_dncremove_one(
         NC_HASH_UNLOCK(hash_spl, sh, ncdp);
 
         /* and finally, put the entry we removed back onto LRU for reuse */
-        mfs_dncrele(dnp);
+        mfs_dncrele(dnp, cd);
         NC_SPLOCK_LRU(dnp,sl);
 	CLR_IN_TRANS(dnp,ncdp) {
             /*
@@ -2214,7 +2225,8 @@ mfs_dncremove_one(
  */
 STATIC int
 mvfs_dncflush_subr(
-    VFS_T *vfsp
+    VFS_T *vfsp,
+    CALL_DATA_T *cd
 )
 {
     register mvfs_dnlc_data_t *ncdp = MDKI_DNLC_GET_DATAP();
@@ -2281,7 +2293,7 @@ mvfs_dncflush_subr(
 	dropped = -1;
         
         MVFS_RW_READ_UNLOCK(&(ncdp->mvfs_dnc_rwlock), srw);
-        mfs_dncrele(dnp);
+        mfs_dncrele(dnp, cd);
         MVFS_RW_READ_LOCK(&(ncdp->mvfs_dnc_rwlock), srw);
         NC_SPLOCK_LRU(dnp,sl);
 	CLR_IN_TRANS(dnp,ncdp) {
@@ -2312,12 +2324,12 @@ mvfs_dncflush_subr(
  * entries while this routine is in progress.
  */
 void
-mfs_dncflush()
+mfs_dncflush(CALL_DATA_T *cd)
 {
     mvfs_dnlc_data_t *ncdp = MDKI_DNLC_GET_DATAP();
   
     if (ncdp->mfs_dnc == NULL) return;	/* No name cache */
-    mvfs_dncflush_subr(NULL);
+    mvfs_dncflush_subr(NULL, cd);
 }
 
 /*
@@ -2332,7 +2344,8 @@ mfs_dncflush()
 
 void
 mfs_dnc_flushvw(
-    VNODE_T *vw
+    VNODE_T *vw,
+    CALL_DATA_T *cd
 )
 {
     register mvfs_dnlc_data_t *ncdp = MDKI_DNLC_GET_DATAP();
@@ -2383,7 +2396,7 @@ mfs_dnc_flushvw(
         NC_SPUNLOCK_LRU(dnp,sl);
         NC_HASH_UNLOCK(hash_spl, sh, ncdp);
         MVFS_RW_READ_UNLOCK(&(ncdp->mvfs_dnc_rwlock), srw);
-        mfs_dncrele(dnp);
+        mfs_dncrele(dnp, cd);
         MVFS_RW_READ_LOCK(&(ncdp->mvfs_dnc_rwlock), srw);
         NC_SPLOCK_LRU(dnp,sl);
 	CLR_IN_TRANS(dnp,ncdp) {
@@ -2411,7 +2424,8 @@ mfs_dnc_flushvw(
 
 void
 mvfs_dnc_flushvfs(
-    VFS_T *vfsp
+    VFS_T *vfsp,
+    CALL_DATA_T *cd
 )
 {
     mvfs_dnlc_data_t *ncdp = MDKI_DNLC_GET_DATAP();
@@ -2419,7 +2433,7 @@ mvfs_dnc_flushvfs(
     register int i;
 
     if (ncdp->mfs_dnc == NULL) return;	/* No name cache */
-    mvfs_dncflush_subr(vfsp);
+    mvfs_dncflush_subr(vfsp, cd);
     BUMPSTAT(mfs_dncstat.dnc_flushvfs);
 }
 
@@ -2480,7 +2494,7 @@ mfs_dnc_invalvp(
     DNC_BUMPVW(vw, dnc_invalvp); 
     BUMPSTAT_VAL(mfs_dncstat.dnc_invalhits, j);
     if (vw) {
-        BUMP_PVSTAT_VAL(vw, dncstat.dnc_invalhits, j);
+        BUMP_PVDNCSTAT_VAL(vw, dncstat.dnc_invalhits, j);
     }
 }
 
@@ -2546,7 +2560,7 @@ mfs_dnc_inval_obj_not_found()
     BUMPSTAT(mfs_dncstat.dnc_invalnf);
     BUMPSTAT_VAL(mfs_dncstat.dnc_invalhits, j);
     if ((dnp) && dnp->vvw) {
-        BUMP_PVSTAT_VAL((dnp->vvw), dncstat.dnc_invalhits, j);
+        BUMP_PVDNCSTAT_VAL((dnp->vvw), dncstat.dnc_invalhits, j);
     }
 }
 
@@ -2592,7 +2606,7 @@ mfs_dnc_invalvw(
     DNC_BUMPVW(vw, dnc_invalvw);
     BUMPSTAT_VAL(mfs_dncstat.dnc_invalhits, j);
     if (vw) {
-       BUMP_PVSTAT_VAL(vw, dncstat.dnc_invalhits, j);
+       BUMP_PVDNCSTAT_VAL(vw, dncstat.dnc_invalhits, j);
     }
 }
 
@@ -2632,7 +2646,7 @@ mfs_dnc_inval_case_synonyms(
     }
     BUMPSTAT_VAL(mfs_dncstat.dnc_invalhits, j);
     if (vw) {
-        BUMP_PVSTAT(vw, dncstat.dnc_invalhits);
+        BUMP_PVDNCSTAT(vw, dncstat.dnc_invalhits);
     }
     return;
 }
@@ -2910,4 +2924,4 @@ mvfs_dnc_count(
     usage->cache_usage[MVFS_CACHE_MAX][MVFS_CACHE_DNCNOENT] = mcdp->mvfs_dncnoentmax;
     return;
 }
-static const char vnode_verid_mvfs_dncops_c[] = "$Id:  07f49eeb.f00211e0.81ce.00:01:84:c3:8b:ce $";
+static const char vnode_verid_mvfs_dncops_c[] = "$Id:  25de083a.863d44e7.b58f.b1:bd:38:e0:66:ca $";

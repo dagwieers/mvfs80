@@ -104,7 +104,7 @@ int
 mvfs_linux_vsync_wrapper(
     VFS_T *vfsp,
     short flag,
-    CRED_T *acred
+    CALL_DATA_T *acd
 );
 
 int
@@ -115,14 +115,14 @@ mvfs_linux_mount_wrapper(
     int flags,
     caddr_t data,
     size_t datalen,
-    CRED_T *cred,
+    CALL_DATA_T *cd,
     MVFS_CALLER_INFO *ctxp
 );
 
 EXTERN int
 mvfs_linux_umount_wrapper(
     VFS_T *vfsp,
-    CRED_T *cred
+    CALL_DATA_T *cd
 );
 
 EXTERN int
@@ -380,7 +380,7 @@ mvfs_linux_enter_fs(void)
 
     if (vrdp->mfs_viewroot_vfsp)
         mdki_mark_vfs_dirty(vrdp->mfs_viewroot_vfsp);
-    mth = mvfs_mythread();
+    mth = mvfs_mythread(NULL);
 #if defined(MVFS_DEBUG) || defined(STACK_CHECKING)
     mth->thr_threadid.stack_check_id = mdki_get_stack_check_id();
 #endif
@@ -459,13 +459,16 @@ mvfs_linux_vnget(
     VFS_T *mnvfsp,
     VFS_T *lovfsp,
     mfs_mnode_t *mnp,
-    VNODE_T **vpp
+    VNODE_T **vpp,
+    CALL_DATA_T *cd,
+    mdki_boolean_t wait
 )
 {
     VTYPE_T vtype;
     VNODE_T *vp;
     VFS_T *vfsp;
     INODE_T *ip;
+    int err = 0;
 
     /*
      * We don't do anything odd in MVFS_LOOPCLAS_VFSP, so we should get
@@ -494,37 +497,56 @@ retry:
          */
         vp = VN_HOLD(mnp->mn_hdr.vp);
         if (!vp) {
-            mvfs_wait_on_inactive(mnp);
-            goto retry;
-        }
-        /* ASSERT(!(ip->i_state & (I_FREEING | I_CLEAR))); */
-        ASSERT(vp->v_sanity == VNODE_SANITY);
-        *vpp = vp;
-        ASSERT(VTOM(vp) == mnp);
-        ASSERT(mnp->mn_hdr.mcount > 1);
-        if (mnp->mn_hdr.realvp != NULL) {
-            switch(mnp->mn_hdr.mclass) {
-              case MFS_VIEWCLAS:
-                /* For views we cannot just copy the inode data because it
-		 * clobbers our device number.  All we have to do is to update
-		 * the attributes that might have changed.
-		 */
-                MVFS_WRAP_UPDATE_ATTRS(vp);
-                break;
-              case MFS_VOBCLAS:
-                break;
-              default:
-                /* copy up inode data again */
-                ASSERT(MDKI_INOISCLRVN(VTOI(mnp->mn_hdr.realvp)));
-
-                SHADOW_CP_INODAT(CVN_TO_INO(mnp->mn_hdr.realvp), VTOI(vp));
-                break;
+            /* We cannot wait on a lookup because of a race with 
+             * mvfs_inactive_common if we are in the process of 
+             * deleting the file being looked up.  Inactive_common
+             * has to release the mnode lock on the file to get the
+             * mnode lock on the parent in order to finish cleaning
+             * up the file.  In the meantime, we can get the lock
+             * on the parent so if we wait for the cleanup to complete
+             * we have created a deadly embrace.  So for Linux we use
+             * the wait flag to tell us if it is safe for us to wait
+             * or not.
+             */
+            if (wait == TRUE) {
+                mvfs_wait_on_inactive(mnp);
+                goto retry;
+            } else {
+                err = ENOENT;
+                VFS_LOG(vfsp, VFS_LOG_WARN,
+                    "attempting to get vnode that is being deleted. %p\n",
+                     mnp->mn_hdr.vp);
             }
+        } else {
+            /* ASSERT(!(ip->i_state & (I_FREEING | I_CLEAR))); */
+            ASSERT(vp->v_sanity == VNODE_SANITY);
+            *vpp = vp;
+            ASSERT(VTOM(vp) == mnp);
+            ASSERT(mnp->mn_hdr.mcount > 1);
+            if (mnp->mn_hdr.realvp != NULL) {
+                switch(mnp->mn_hdr.mclass) {
+                  case MFS_VIEWCLAS:
+                    /* For views we cannot just copy the inode data because it
+		     * clobbers our device number.  All we have to do is to update
+                     * the attributes that might have changed.
+                     */
+                    MVFS_WRAP_UPDATE_ATTRS(vp, cd);
+                    break;
+                  case MFS_VOBCLAS:
+                    break;
+                  default:
+                    /* copy up inode data again */
+                    ASSERT(MDKI_INOISCLRVN(VTOI(mnp->mn_hdr.realvp)));
+
+                    SHADOW_CP_INODAT(CVN_TO_INO(mnp->mn_hdr.realvp), VTOI(vp));
+                    break;
+                }
+            }
+            MDB_VFSLOG((MFS_VGET,"vfsp=%lx mnp=%lx vp=%lx attached\n", vfsp, mnp, vp));
         }
         MUNLOCK(mnp);
-        mfs_mnrele(mnp);  /* Drop extra mnode refcount */
-        MDB_VFSLOG((MFS_VGET,"vfsp=%lx mnp=%lx vp=%lx attached\n", vfsp, mnp, vp));
-        return(0);
+        mfs_mnrele(mnp, cd);  /* Drop extra mnode refcount */
+        return(err);
     }
 
     vtype = mfs_mn_vtype(mnp);
@@ -539,7 +561,7 @@ retry:
         VFS_LOG(vfsp, VFS_LOG_ERR,
                 "attempt to set unimplemented file type %o\n", vtype);
         MUNLOCK(mnp);
-        mfs_mnrele(mnp);          /* drop */
+        mfs_mnrele(mnp, cd);          /* drop */
         return ENOSYS;
     } /* end switch(vtype) */
 
@@ -560,7 +582,7 @@ retry:
     } else {
         /* We ran out of inodes */
         MUNLOCK(mnp);
-        mfs_mnrele(mnp);          /* drop */
+        mfs_mnrele(mnp, cd);          /* drop */
         return ENFILE;
     }
 
@@ -672,7 +694,7 @@ retry:
      * Update size & other statistics from the mnode prior to making the new
      * vnode visible
      */
-    MVFS_WRAP_UPDATE_ATTRS(vp);
+    MVFS_WRAP_UPDATE_ATTRS(vp, cd);
 
     /* All initialized, now unlock the mnode lock */
 
@@ -848,11 +870,11 @@ mvfs_linux_update_attrs(
             mvfs_log(MFS_LOG_DEBUG,"getattr failed on update vp=%p err=%d\n",
                      vp, error);
         }
-        mdki_linux_destroy_call_data(&cd);
         if (mnp->mn_hdr.mclass == MFS_VIEWCLAS && cvp != NULL) {
             mnp->mn_hdr.realvp = NULL;
-            CVN_RELE(cvp);
+            CVN_RELE(cvp, cd);
         }
+        mdki_linux_destroy_call_data(&cd);
         if (error)
             return;                     /* no pullup, attributes invalid! */
         break;
@@ -900,7 +922,7 @@ mvfs_linux_mmap_ctx(
     if ((err = mvfs_mmap_getcvp(vp, &cvp, sharing, rwx, cd)) != 0)
         goto out;
     err = MVOP_MMAP(cvp, sharing, rwx, cd, ctxp);
-    CVN_RELE(cvp);
+    CVN_RELE(cvp, cd);
 
     if (!err)
         mvfs_mmap_no_audit(vp, sharing, rwx, cd);
@@ -1018,7 +1040,7 @@ mvfs_linux_inactive(
 
     mnp = VTOM(vp);
     if (mnp->mn_hdr.cached_pages) {
-	(void) PVN_FLUSHINACTIVE(vp, MFS_PVN_FLUSH, MVFS_CD2CRED(cd));
+	(void) PVN_FLUSHINACTIVE(vp, MFS_PVN_FLUSH, cd);
     }
 
     /*
@@ -1046,7 +1068,7 @@ mvfs_linux_inactive(
         vp->v_data = NULL;
         mdki_inactive_finalize(vp);
         MUNLOCK(mnp);
-        mfs_mnrele(mnp);
+        mfs_mnrele(mnp, cd);
     } else {
         MUNLOCK(mnp);
     }
@@ -1095,8 +1117,11 @@ mvfs_linux_vstatfs_wrapper(
 {
     int error;
     struct mfs_mntinfo *mmi;
+    CALL_DATA_T cd;
 
-    error = mfs_vstatfs(vfsp, sbp);
+    mdki_linux_init_call_data(&cd);
+    error = mvfs_vstatfs_common(vfsp, sbp, &cd);
+    mdki_linux_destroy_call_data(&cd);
     if (error != 0)
         return error;
     sbp->f_fsid = VFS_TO_MMI(vfsp)->mmi_nvfsid; /* XXX MDKI_VFSID()? */
@@ -1111,7 +1136,7 @@ mvfs_linux_mount_wrapper(
     int flags,
     caddr_t data,
     size_t datalen,
-    CRED_T *cred,
+    CALL_DATA_T *cd,
     MVFS_CALLER_INFO *ctxp
 )
 {
@@ -1151,7 +1176,7 @@ mvfs_linux_mount_wrapper(
 #endif
 
     err = mfs_vmount_subr(vfsp, mvp, pn, flags, data,
-                          size, cred, ctxp);
+                          size, cd, ctxp);
     if (err == 0 && vfsp == vrdp->mfs_viewroot_vfsp) {
         mdki_set_logging_vfsp(vfsp);
         mdki_set_clrvnode_vfsp(vfsp);
@@ -1169,7 +1194,7 @@ mvfs_linux_mount_wrapper(
 int
 mvfs_linux_umount_wrapper(
     VFS_T *vfsp,
-    CRED_T *cred
+    CALL_DATA_T *cd
 )
 {
     int err;
@@ -1189,7 +1214,7 @@ mvfs_linux_umount_wrapper(
     } else
         isviewroot = FALSE;
     
-    err = mfs_vunmount(vfsp, cred);
+    err = mfs_vunmount(vfsp, cd);
 
 #ifdef MVFS_DEBUG
     if (err != 0) {
@@ -2278,11 +2303,11 @@ int
 mvfs_linux_vsync_wrapper(
     VFS_T *vfsp,
     short flag,
-    CRED_T *acred
+    CALL_DATA_T *acd
 )
 {
     int err;
-    err = mfs_vsync(vfsp, flag, acred);
+    err = mfs_vsync(vfsp, flag, acd);
 #ifdef MVFS_DEBUG
     if (err != 0 || mvfs_linux_sync_print_vnodes) {
         /* XXX need a way to find all clrvnodes */
@@ -2427,7 +2452,8 @@ mvfs_get_thread_ptr(void)
 extern void
 mvfs_release_thread_ptr(struct mvfs_thread *thr)
 {
-    mvfs_exit_fs(thr);
+    if (thr != NULL) 
+        mvfs_exit_fs(thr);
     return;
 }
 
@@ -2461,7 +2487,7 @@ mvfs_linux_stat_zero(struct mvfs_statistics_data *sdp)
 int
 mvfs_linux_prod_parent_dir_cache(
     struct mfs_mnode *mnp,
-    CRED_T *cred
+    CALL_DATA_T *cd
 )
 {
     mfs_pn_char_t *dirname;
@@ -2480,15 +2506,15 @@ mvfs_linux_prod_parent_dir_cache(
 
         error = LOOKUP_STORAGE_FILE(MFS_CLRTEXT_RO(mnp),
                                     dirname,
-                                    NULL, &cvp, cred);
+                                    NULL, &cvp, cd);
         if (error == 0) {
             /* shrink the dcache. */
             if (cvp->v_dent != NULL) {
                 shrink_dcache_parent((DENT_T *)cvp->v_dent);
-                CVN_RELE(cvp);
+                CVN_RELE(cvp, cd);
                 break;
             }
-            CVN_RELE(cvp);
+            CVN_RELE(cvp, cd);
         }
         /*
          * If we did not find a v_dent walk up the tree until we
@@ -2509,4 +2535,4 @@ mvfs_linux_prod_parent_dir_cache(
     return error;
 }
 
-static const char vnode_verid_mvfs_mdep_linux_c[] = "$Id:  55fd5d6d.690811e2.93a5.00:01:84:c3:8a:52 $";
+static const char vnode_verid_mvfs_mdep_linux_c[] = "$Id:  272cf274.3ebf4390.ad56.f9:79:c3:18:5c:0f $";

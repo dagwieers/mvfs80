@@ -158,7 +158,7 @@ mvfs_sync_attr(
     CALL_DATA_T *cd
 )
 {
-    int error;
+    int error = 0;
     int mtime_was_zero = 0;
     CALL_DATA_T *ncd;
 
@@ -176,7 +176,7 @@ mvfs_sync_attr(
 
     if ( (mnp->mn_hdr.realvp) && (MCRED(mnp)) && (!mnp->mn_vob.cleartext.isvob) &&
          (!mnp->mn_vob.cleartext.delete_on_close) ) { 
-	/* Get latest cleartext attributes */
+        /* Get latest cleartext attributes */
         /*
          * By passing in the vattr (if we have one passed from
          * mfs_getattr()), we may copy only a subset of the attributes
@@ -195,14 +195,18 @@ mvfs_sync_attr(
          * NFS will be.
          */
 
-        (void) mvfs_clearattr(MTOV(mnp), vap, MCRED(mnp));
-	
-	/* Following to debug problems with 'touch' setting
-	 * fstat time to 0
-	 */
+        ncd = MVFS_ALLOC_SUBSTITUTE_CRED(cd, MCRED(mnp));
+        if (!MVFS_SUBSTITUTE_CRED_IS_VALID(ncd)) {
+            error = ENOMEM;
+        } else {
+            (void) mvfs_clearattr(MTOV(mnp), vap, ncd);
+        }
+        /* Following to debug problems with 'touch' setting
+         * fstat time to 0
+         */
         if (mnp->mn_vob.attr.fstat.mtime.tv_sec == 0) {
-	    mtime_was_zero = 1;
-	    mvfs_log(MFS_LOG_DEBUG, "sync_attr: vw=%s vob=%s dbid=0x%x "
+            mtime_was_zero = 1;
+            mvfs_log(MFS_LOG_DEBUG, "sync_attr: vw=%s vob=%s dbid=0x%x "
                      "mtime = 0x%"KS_FMT_TV_SEC_T_X".%"KS_FMT_TV_USEC_T_X" "
                      "clr mtime=0x%"KS_FMT_TV_USEC_T_X"\n",
                      mfs_vp2vw(mnp->mn_hdr.vp),
@@ -211,30 +215,27 @@ mvfs_sync_attr(
                      mnp->mn_vob.attr.fstat.mtime.tv_sec, 
                      mnp->mn_vob.attr.fstat.mtime.tv_usec,
                      VATTR_GET_MTIME(&mnp->mn_vob.cleartext.va));
-	}
+        }
 
-        ncd = MVFS_ALLOC_SUBSTITUTE_CRED(cd, MCRED(mnp));
-        if (ncd == NULL) {
-            error = ENOMEM;
-        } else {
-	    error = mvfs_clnt_setattr_locked(MTOV(mnp), NULL, 0, bhflag, 
-		                             MWCRED(mnp), ncd, saflag);
+        if (error == 0) {
+            error = mvfs_clnt_setattr_locked(MTOV(mnp), NULL, 0, bhflag, 
+                                             MWCRED(mnp), ncd, saflag);
         }
         MVFS_FREE_SUBSTITUTE_CRED(ncd);
-	if (error) {
-	    mvfs_logperr(MFS_LOG_WARN, error, 
-		"mvfs_sync_attr: vw=%s vob=%s dbid=0x%x", 
-		    mfs_vp2vw(mnp->mn_hdr.vp),
-		    mfs_vp2dev(mnp->mn_hdr.vp),
-		    mnp->mn_hdr.fid.mf_dbid);
-	} else if (mtime_was_zero) {
-	    mvfs_log(MFS_LOG_DEBUG, "sync_attr: after: mtime=0x%"KS_FMT_TV_SEC_T_X".%"KS_FMT_TV_USEC_T_X"\n",
-		mnp->mn_vob.attr.fstat.mtime.tv_sec,
-		mnp->mn_vob.attr.fstat.mtime.tv_usec);
-	}
+        if (error) {
+            mvfs_logperr(MFS_LOG_WARN, error, 
+                "mvfs_sync_attr: vw=%s vob=%s dbid=0x%x", 
+                    mfs_vp2vw(mnp->mn_hdr.vp),
+                    mfs_vp2dev(mnp->mn_hdr.vp),
+                    mnp->mn_hdr.fid.mf_dbid);
+        } else if (mtime_was_zero) {
+            mvfs_log(MFS_LOG_DEBUG, "sync_attr: after: mtime=0x%"KS_FMT_TV_SEC_T_X".%"KS_FMT_TV_USEC_T_X"\n",
+                mnp->mn_vob.attr.fstat.mtime.tv_sec,
+                mnp->mn_vob.attr.fstat.mtime.tv_usec);
+        }
     } else {
-	MDB_XLOG((MDB_CTIME, "sync_attr: nothing to do (mcred=%"KS_FMT_PTR_T")\n", MCRED(mnp)));
-	error = 0;
+        MDB_XLOG((MDB_CTIME, "sync_attr: nothing to do (mcred=%"KS_FMT_PTR_T")\n", MCRED(mnp)));
+        error = 0;
     }
     return(error);
 }
@@ -255,7 +256,6 @@ mfs_set_audited(
     CALL_DATA_T *cd
 )
 {
-
     mvfs_thread_t *mth;
     mfs_mnode_t *mnp = VTOM(vp);
     int error = 0;
@@ -285,15 +285,15 @@ mfs_set_audited(
 
     mth = MVFS_MYTHREAD(cd);
     if (mth->thr_auditon) {
-	MLOCK(mnp);
-	if (mnp->mn_hdr.realvp == NULL)	/* probably a failed COW */
-	    error = EIO;		/* only for reporting below */
-	else if (!MFS_FSTAT_AUDITED(mnp) && !MFS_CLRTEXT_RO(mnp)) {
-	    error = mvfs_clnt_setattr_locked(vp, NULL, 
-			TBS_FMODE_AUDITED_OBJ, MFS_USE_PROCBH, 0,
+        MLOCK(mnp);
+        if (mnp->mn_hdr.realvp == NULL)	/* probably a failed COW */
+            error = EIO;		/* only for reporting below */
+        else if (!MFS_FSTAT_AUDITED(mnp) && !MFS_CLRTEXT_RO(mnp)) {
+            error = mvfs_clnt_setattr_locked(vp, NULL, 
+                        TBS_FMODE_AUDITED_OBJ, MFS_USE_PROCBH, 0,
                         cd, 0);
-	}
-	MUNLOCK(mnp);
+        }
+        MUNLOCK(mnp);
         /*
          * No one to return the error to, so display a log message
          * for any errors.  This is important evidence to have since it is
@@ -302,10 +302,10 @@ mfs_set_audited(
          * rebuild when he expected it to.
          */
 
-	MVFS_BUMPTIME(stime, dtime, mfs_austat.au_settime);
-	mvfs_logperr(MFS_LOG_ERR, error, 
-		"unable to set audited bit on object vw=%s vob=%s dbid=0x%x", 
-			mfs_vp2vw(vp), mfs_vp2dev(vp), mfs_vp2dbid(vp));
+        MVFS_BUMPTIME(stime, dtime, mfs_austat.au_settime);
+        mvfs_logperr(MFS_LOG_ERR, error, 
+                "unable to set audited bit on object vw=%s vob=%s dbid=0x%x", 
+                        mfs_vp2vw(vp), mfs_vp2dev(vp), mfs_vp2dbid(vp));
     }
 }
 
@@ -376,7 +376,8 @@ mvfs_change_oid_subr(
      */
 
     if ((choidflag & (MFS_CHOID_FORCE|MFS_CHOID_TRUNC)) == 0  && 
-						!MFS_CLRTEXT_RO(mnp)) {
+        !MFS_CLRTEXT_RO(mnp))
+    {
         /* 
          * Suppress duplicate choids - they are expensive.
          * This is particularly true for non-atria access where
@@ -386,43 +387,44 @@ mvfs_change_oid_subr(
 
         /* 
          * Strategy 1 - if OID not audited (potentially in a CR), 
-	 * there is no need for a choid
+         * there is no need for a choid
          */
 
-	if (!MFS_FSTAT_AUDITED(mnp)) {
+        if (!MFS_FSTAT_AUDITED(mnp)) {
             error = 0;
             goto errout;
-	}
+        }
 
-  	/* 
-	 * Strategy 2 - maintain a cache of the BH that the last
-	 * choid was done under.  Additional (non-forced) choids
+        /* 
+         * Strategy 2 - maintain a cache of the BH that the last
+         * choid was done under.  Additional (non-forced) choids
          * under this same BH will be suppressed.  This optimization
-	 * is required because an object may be choided under a build,
-	 * which means that the 'audited' bit is set (because the
-	 * choid put that OID in the audit file), but the object should
-	 * not be repeatedly choided.
-	 *
-	 * Both the build-handle and an MFS-internal build-handle-sequence
-	 * number must be checked.  A choid is required by clearmake for each
-	 * different audit in clearmake, even when the two audits have
-	 * the same build handle (frozen ref time).  So, the MFS
-	 * maintains a sequence number which is incremented every
-	 * time there is a 'start audit' done.  If this is a 
-	 * different audit (even with the same BH), then a choid must
-	 * be done.
+         * is required because an object may be choided under a build,
+         * which means that the 'audited' bit is set (because the
+         * choid put that OID in the audit file), but the object should
+         * not be repeatedly choided.
+         *
+         * Both the build-handle and an MFS-internal build-handle-sequence
+         * number must be checked.  A choid is required by clearmake for each
+         * different audit in clearmake, even when the two audits have
+         * the same build handle (frozen ref time).  So, the MFS
+         * maintains a sequence number which is incremented every
+         * time there is a 'start audit' done.  If this is a 
+         * different audit (even with the same BH), then a choid must
+         * be done.
          * e.g. if a DO lib.a is written in target foo.o and 
          *      in target bar.o, there should be two choids
          *	because they are different targets (different audits)
          * 	even though the build session is the same for both
-	 */
+         */
 
-	if (mnp->mn_vob.choid_audited &&
-		MFS_BHEQ(mnp->mn_vob.choid_bh, mth->thr_bh) &&
-		mnp->mn_vob.choid_bh_seq == mth->thr_aud_seq) {
+        if (mnp->mn_vob.choid_audited &&
+                MFS_BHEQ(mnp->mn_vob.choid_bh, mth->thr_bh) &&
+            mnp->mn_vob.choid_bh_seq == mth->thr_aud_seq)
+        {
             error = 0;
-	    goto errout;
-	}
+            goto errout;
+        }
 
     }
 
@@ -432,15 +434,15 @@ mvfs_change_oid_subr(
      */
 
     if (sleepflag == MFS_NOSLEEP) {
-	error = EWOULDBLOCK;
-	goto errout;
+        error = EWOULDBLOCK;
+        goto errout;
     }
 
     /*
      * Set common choid options for the choid operation
      */
     choid_opt = (mth->thr_auditon) ?
-	VIEW_CHANGE_OID_SET_AUDIT : VIEW_CHANGE_OID_CLR_AUDIT;
+        VIEW_CHANGE_OID_SET_AUDIT : VIEW_CHANGE_OID_CLR_AUDIT;
   retry:
     copy_on_write = MFS_CLRTEXT_RO(mnp);
 
@@ -454,48 +456,48 @@ mvfs_change_oid_subr(
         if ((cl_nm = mnp->mn_vob.cleartext.nm) == NULL) cl_nm = "not cached";
         mvfs_log(MFS_LOG_DEBUG, "clearops: %s: prevoid=%s, prevnm: %s\n", 
                  op_str, mvfs_oid_to_str(&mnp->mn_vob.attr.obj_oid, *oid_strp), cl_nm);
-	error = mfs_clnt_choid_locked(vp, choid_opt, &alloc_unitp->prevoid, cd);
-	if (error) goto errout;
-	choid_done = 1;
+        error = mfs_clnt_choid_locked(vp, choid_opt, &alloc_unitp->prevoid, cd);
+        if (error) goto errout;
+        choid_done = 1;
     } else {				/* Copy-on-write */
         /* mustn't be writers if it's currently read-only */
         ASSERT(mnp->mn_vob.open_wcount == 0);
-	if (mnp->mn_vob.open_count != 0 && mnp->mn_vob.open_wcount == 0) {
-	    mvfs_log(MFS_LOG_DEBUG, "choid copy-on-write TXTBSY\n");
+        if (mnp->mn_vob.open_count != 0 && mnp->mn_vob.open_wcount == 0) {
+            mvfs_log(MFS_LOG_DEBUG, "choid copy-on-write TXTBSY\n");
             /*
              * We can't allow this to succeed.  Most systems have file locking
              * state attached to the cleartext vnode, and if we retarget
              * the cltxt, the locking state gets incorrectly abandoned.
              */
-	    error = ETXTBSY;
-	    goto errout;
-	}
+            error = ETXTBSY;
+            goto errout;
+        }
         error = mfs_getcleartext(vp, &ocvp, cd);
         if (error) goto errout;
 
         /* Get latest/best length of old cleartext */
 
-	error = mvfs_clearattr(vp, NULL, MVFS_CD2CRED(cd));
-	if (error) goto errout;
-    	len = VATTR_GET_SIZE(&mnp->mn_vob.cleartext.va);
+        error = mvfs_clearattr(vp, NULL, cd);
+        if (error) goto errout;
+        len = VATTR_GET_SIZE(&mnp->mn_vob.cleartext.va);
 
-	/* Do the choid */
+        /* Do the choid */
         op_str = "cow";
         if ((cl_nm = mnp->mn_vob.cleartext.nm) == NULL) cl_nm = "not cached";
         mvfs_log(MFS_LOG_DEBUG, "clearops: %s: prevoid=%s, prevnm: %s\n", 
                  op_str, mvfs_oid_to_str(&mnp->mn_vob.attr.obj_oid, *oid_strp), cl_nm);
 
-	error = mfs_clnt_choid_locked(vp, choid_opt, &alloc_unitp->prevoid, cd);
-	if (error) goto errout;
-	choid_done = 1;
+        error = mfs_clnt_choid_locked(vp, choid_opt, &alloc_unitp->prevoid, cd);
+        if (error) goto errout;
+        choid_done = 1;
 
-  	/*
-	 * Expect cleartext to change... so purge the old
+        /*
+         * Expect cleartext to change... so purge the old
          * cleartext binding.
          */
 
-	mfs_clear_mark_name_purge(vp);	/* Mark for purge */
-	mfs_clear_rele(vp, MVFS_CD2CRED(cd));	/* And do the purge now */
+        mfs_clear_mark_name_purge(vp);	/* Mark for purge */
+        mfs_clear_rele(vp, cd);	/* And do the purge now */
 
         /* 
          * Old cleartext was in the vob.  The new one should be
@@ -505,20 +507,20 @@ mvfs_change_oid_subr(
          */
 
         VATTR_NULL(vap);
-    	VATTR_SET_TYPE(vap, VREG);
-    	/*
-     	 * This is OK for clear_create mode because choid changed the
-     	 * mode in the stats (in the returned RPC response) from read-only 
-	 * to the correct write permissions.
-     	 */
-    	VATTR_SET_MODE_TYPE(vap, S_IFREG);
-    	VATTR_SET_MODE_RIGHTS(vap, 
-		(mnp->mn_vob.attr.fstat.mode & ~TBS_FMODE_AUDITED_OBJ) & 
-			  ~MDKI_GET_U_CMASK());
-    	VATTR_SET_SIZE(vap, 0);
-    	VATTR_SET_MASK(vap, AT_TYPE|AT_MODE|AT_SIZE);
-    	error = mfs_clear_create(vp, vap, &ncvp, cd, mode);  /* no FOFFMAX */
-    	switch (error) {
+        VATTR_SET_TYPE(vap, VREG);
+        /*
+         * This is OK for clear_create mode because choid changed the
+         * mode in the stats (in the returned RPC response) from read-only 
+         * to the correct write permissions.
+         */
+        VATTR_SET_MODE_TYPE(vap, S_IFREG);
+        VATTR_SET_MODE_RIGHTS(vap, 
+                (mnp->mn_vob.attr.fstat.mode & ~TBS_FMODE_AUDITED_OBJ) & 
+                          ~MDKI_GET_U_CMASK());
+        VATTR_SET_SIZE(vap, 0);
+        VATTR_SET_MASK(vap, AT_TYPE|AT_MODE|AT_SIZE);
+        error = mfs_clear_create(vp, vap, &ncvp, cd, mode);  /* no FOFFMAX */
+        switch (error) {
           case 0:                       /* all's well */
             break;
           case EEXIST:
@@ -554,7 +556,7 @@ mvfs_change_oid_subr(
             goto errout;
         }
 
-    	ASSERT(mnp->mn_hdr.realvp);
+        ASSERT(mnp->mn_hdr.realvp);
 
         /*
          * MVFS used to re-open the cltxt here, if we had existing
@@ -569,11 +571,11 @@ mvfs_change_oid_subr(
         ASSERT(mnp->mn_vob.open_wcount == 0 && 
                mnp->mn_vob.open_count == 0);
 
-	if (ocvp == ncvp) {
-	    error = ENXIO;
-	    mvfs_log(MFS_LOG_ERR, "copy-on-write: duplicate cleartext\n");
-	    goto errout;
-	}
+        if (ocvp == ncvp) {
+            error = ENXIO;
+            mvfs_log(MFS_LOG_ERR, "copy-on-write: duplicate cleartext\n");
+            goto errout;
+        }
 
         /* 
          * Finally, copy the original into the destination 
@@ -581,13 +583,13 @@ mvfs_change_oid_subr(
          */
 
         if ((choidflag & MFS_CHOID_TRUNC) != MFS_CHOID_TRUNC) {
-            error = MVFS_COPYVP(ocvp, ncvp, len, MVFS_CD2CRED(cd));
+            error = MVFS_COPYVP(ocvp, ncvp, len, cd);
         }
     }
 
 errout:
-    if (ocvp) CVN_RELE(ocvp);
-    if (ncvp) CVN_RELE(ncvp);
+    if (ocvp) CVN_RELE(ocvp, cd);
+    if (ncvp) CVN_RELE(ncvp, cd);
 
     /* 
      * Don't print error unless got past choid - choid errors are 
@@ -595,15 +597,15 @@ errout:
      * are checked. 
      */
     if (error && choid_done) {
-	mfs_clearperr(vp, "cleartext copy-on-write", error);
+        mfs_clearperr(vp, "cleartext copy-on-write", error);
     }
     if (choid_done) {		/* Record choid in audit */
 
-	/*
-	 * Record choid done under the current audit build handle
-	 * for the choid suppression at the beginning
-	 */
-	MFS_REMEMBER_CHOID_BH(mth, mnp);
+        /*
+         * Record choid done under the current audit build handle
+         * for the choid suppression at the beginning
+         */
+        MFS_REMEMBER_CHOID_BH(mth, mnp);
 
         /*
          *
@@ -631,18 +633,19 @@ errout:
 
         alloc_unitp->newoid = mnp->mn_vob.attr.obj_oid;
 
-	/* Unlock to avoid deadlocks with the auditing */
+        /* Unlock to avoid deadlocks with the auditing */
 
-	MUNLOCK(mnp);
-	
-        MFS_AUDIT(MFS_AR_CHOID,NULL,(char *)&alloc_unitp->newoid,NULL,(char *)&alloc_unitp->prevoid,vp,cd);
-	MLOCK(mnp);		/* Re-lock for caller */
-	/* 
-	 * In case someone purged the cleartext while we were auditing,
+        MUNLOCK(mnp);
+        
+        MFS_AUDIT(MFS_AR_CHOID, NULL, (char *)&alloc_unitp->newoid, NULL,
+                  (char *)&alloc_unitp->prevoid, vp, cd);
+        MLOCK(mnp);		/* Re-lock for caller */
+        /* 
+         * In case someone purged the cleartext while we were auditing,
          * we must restore it here.  Callers expect a cleartext to be
          * valid on non-error return from this routine.
          */
-	if (!error) error = mfs_getcleartext(vp, NULL, cd);
+        if (!error) error = mfs_getcleartext(vp, NULL, cd);
     }
 
     /* Log msg: op type (choid-only/cow), uid, cmd, oid, cleartxtname, vp, mnp, err */
@@ -720,7 +723,7 @@ mvfs_mmap_getcvp(
         !mfs_clear_writable(vp))
     {
         error = EROFS;
-        CVN_RELE(*cvpp);
+        CVN_RELE(*cvpp, cd);
         *cvpp = NULL;
     }
 
@@ -749,29 +752,29 @@ mvfs_mmap_no_audit(
     int choidflags, error = 0;
 
     if (prot & PROT_READ) {
-	MFS_AUDIT(MFS_AR_READ, NULL, NULL, NULL, NULL, vp, cd);
+        MFS_AUDIT(MFS_AR_READ, NULL, NULL, NULL, NULL, vp, cd);
     }
     if ((mflags & MAP_SHARED) && (prot & PROT_WRITE)) {
-	if (MFS_ISVOB(mnp)) {
-	    /* Don't try to choid on a loopback node! */
-	    /*
-	     * We need to do a CHOID here, because it could be an open-less
-	     * mmap, e.g. the NFS server.
-	     */
-	    MLOCK(mnp);
-	    error = mvfs_clearattr(vp, NULL, MVFS_CD2CRED(cd));
-	    if (!error) {
-		/* Force choid; no open to rely on if NFS */
-		choidflags = MFS_CHOID_FORCE;
-		if (VATTR_GET_SIZE(&(mnp->mn_vob.cleartext.va)) == 0)
-		    choidflags |= MFS_CHOID_TRUNC;
-		error = mfs_change_oid(vp, choidflags, MFS_SLEEP, cd);
-	    }
-	    MUNLOCK(mnp);
-	}
-	if (!error) {
-	    MFS_AUDIT(MFS_AR_WRITE, NULL, NULL, NULL, NULL, vp, cd);
-	}
+        if (MFS_ISVOB(mnp)) {
+            /* Don't try to choid on a loopback node! */
+            /*
+             * We need to do a CHOID here, because it could be an open-less
+             * mmap, e.g. the NFS server.
+             */
+            MLOCK(mnp);
+            error = mvfs_clearattr(vp, NULL, cd);
+            if (!error) {
+                /* Force choid; no open to rely on if NFS */
+                choidflags = MFS_CHOID_FORCE;
+                if (VATTR_GET_SIZE(&(mnp->mn_vob.cleartext.va)) == 0)
+                    choidflags |= MFS_CHOID_TRUNC;
+                error = mfs_change_oid(vp, choidflags, MFS_SLEEP, cd);
+            }
+            MUNLOCK(mnp);
+        }
+        if (!error) {
+            MFS_AUDIT(MFS_AR_WRITE, NULL, NULL, NULL, NULL, vp, cd);
+        }
     }
 }
 
@@ -825,6 +828,7 @@ mvfs_openv_ctx(
     mfs_mnode_t *mnp;
     int choidflag;
     MVFS_DECLARE_THREAD(mth)
+
     /* Declare a type so we can do one allocation to save stack space. */
     struct {
             timestruc_t stime;	/* For statistics */
@@ -851,42 +855,42 @@ mvfs_openv_ctx(
     error = ctxt_retry_done = 0;
     ASSERT(VTOM(vp)->mn_hdr.vp);
     switch (VTOM(vp)->mn_hdr.mclass) {
-	case MFS_SDEVCLAS:
-	    error = 0;
-	    break;
-	case MFS_VIEWCLAS:
-	case MFS_LOOPCLAS: 	/* Pass on to real vnode */
-	    if (do_vop) {
-		cvp = MFS_CLRVP(vp);	/* Keep realvp safe */
-		error = MVOP_OPEN(&cvp, mode, cd, ctxp);
-	    }
-	    break;
-	case MFS_NTVWCLAS:
-	    error = 0;		/* Allow any open */
-	    break;
-	case MFS_VIEWDIRCLAS:
-	    error = mfs_viewdiropen(vpp, mode, MVFS_CD2CRED(cd));
-	    break;
-	case MFS_VOBRTCLAS:
-	    vp = mfs_bindroot(*vpp, cd, &error);
-	    if (error) {
-		if (error == ESRCH) error = 0;	/* Null view OK */
-		break;				/* Exit */
-	    }
-	    /* Fall Through */
-	case MFS_VOBCLAS: {
+        case MFS_SDEVCLAS:
+            error = 0;
+            break;
+        case MFS_VIEWCLAS:
+        case MFS_LOOPCLAS: 	/* Pass on to real vnode */
+            if (do_vop) {
+                cvp = MFS_CLRVP(vp);	/* Keep realvp safe */
+                error = MVOP_OPEN(&cvp, mode, cd, ctxp);
+            }
+            break;
+        case MFS_NTVWCLAS:
+            error = 0;		/* Allow any open */
+            break;
+        case MFS_VIEWDIRCLAS:
+            error = mfs_viewdiropen(vpp, mode, MVFS_CD2CRED(cd));
+            break;
+        case MFS_VOBRTCLAS:
+            vp = mfs_bindroot(*vpp, cd, &error);
+            if (error) {
+                if (error == ESRCH) error = 0;	/* Null view OK */
+                break;				/* Exit */
+            }
+            /* Fall Through */
+        case MFS_VOBCLAS: {
 
-	    /* 
-	     * Preset error return to OK.
-	     */
+            /* 
+             * Preset error return to OK.
+             */
 
-	    error = 0;
+            error = 0;
 
-	    /* Rebind the vnode op */
+            /* Rebind the vnode op */
  
-	    (void) mfs_rebind_vpp((vp != *vpp), &vp, cd);
+            (void) mfs_rebind_vpp((vp != *vpp), &vp, cd);
 
-	    mnp = VTOM(vp);
+            mnp = VTOM(vp);
 
             if ((mode & (FWRITE|FTRUNC|FAPPEND))
                 && (vp->v_vfsp->vfs_flag & VFS_RDONLY) != 0)
@@ -895,23 +899,23 @@ mvfs_openv_ctx(
                 break;
             }
 
-	    /*
+            /*
              * For directories, return EISDIR if the open mode
-	     * includes write access.
-	     */
-	    if (MVFS_ISVTYPE(vp, VDIR)) {
-		if (mode & (FWRITE|FTRUNC|FAPPEND)) {
-		    error = EISDIR;
+             * includes write access.
+             */
+            if (MVFS_ISVTYPE(vp, VDIR)) {
+                if (mode & (FWRITE|FTRUNC|FAPPEND)) {
+                    error = EISDIR;
                     break;
                 }
-	    }
+            }
 
-	    /* 
-	     * For regular files, get cleartext and if an open for
-	     * write then choid the file
-	     */
-		
-	    if (MVFS_ISVTYPE(vp, VREG)) {
+            /* 
+             * For regular files, get cleartext and if an open for
+             * write then choid the file
+             */
+                
+            if (MVFS_ISVTYPE(vp, VREG)) {
                 /* Get latest attributes if close to open consistency */
                 /* Do this before getting cleartext, in case a winked-in VOB
                    DO has moved to the view (copy-on-write).  It'll get
@@ -946,16 +950,16 @@ mvfs_openv_ctx(
                                  mfs_clearstat.cto_getattr_time);
 
                     BUMPSTAT(mfs_acstat.ac_cto);
-                    BUMPVSTAT(vp,acstat.ac_cto);
+                    BUMP_VACSTAT(vp, acstat.ac_cto);
                     BUMPSTAT(mfs_acstat.ac_misses);
-                    BUMPVSTAT(vp,acstat.ac_misses);
+                    BUMP_VACSTAT(vp, acstat.ac_misses);
                 }
 
-    		MLOCK(mnp);
+                MLOCK(mnp);
 
-		/* Make sure a cleartext before any choid call */
-		error = mfs_getcleartext(vp, NULL, cd);
-		if (error) {
+                /* Make sure a cleartext before any choid call */
+                error = mfs_getcleartext(vp, NULL, cd);
+                if (error) {
                     /* print error if even one other current open
                        (getcltxt logs if open_count > 1) */
                     if (error == ESTALE && mnp->mn_vob.open_count > 0)
@@ -963,9 +967,9 @@ mvfs_openv_ctx(
                     mvfs_log(MFS_LOG_DEBUG,
                        "mvfs_openv_ctx: 1st mfs_getcleartext(%p) returned %d\n",
                         vp, error);
-		    MUNLOCK(mnp);
-		    break;
-		}
+                    MUNLOCK(mnp);
+                    break;
+                }
 
                 /*
                  * Don't choid on FCREAT if it's FREAD|FCREAT.
@@ -973,20 +977,20 @@ mvfs_openv_ctx(
                  * file didn't exist, VOP_CREATE() already did the
                  * creation for us and it's allocated a new OID.
                  */
-		if (mode != (FREAD|FCREAT) &&
+                if (mode != (FREAD|FCREAT) &&
                     (mode & (FWRITE|FCREAT|FAPPEND|FTRUNC)))
                 {
-		    choidflag = MFS_CHOID_FORCE;
-		    if (mode & FTRUNC) choidflag |= MFS_CHOID_TRUNC;
-		    if (MFS_CLRTEXT_RO(mnp) &&
-			mnp->mn_vob.open_count != 0 &&
-			mnp->mn_vob.open_wcount == 0)
-		    {
-			mvfs_log(MFS_LOG_DEBUG, "open copy-on-write TXTBSY\n");
-			error = ETXTBSY;
-			MUNLOCK(mnp);
-			break;
-		    }
+                    choidflag = MFS_CHOID_FORCE;
+                    if (mode & FTRUNC) choidflag |= MFS_CHOID_TRUNC;
+                    if (MFS_CLRTEXT_RO(mnp) &&
+                        mnp->mn_vob.open_count != 0 &&
+                        mnp->mn_vob.open_wcount == 0)
+                    {
+                        mvfs_log(MFS_LOG_DEBUG, "open copy-on-write TXTBSY\n");
+                        error = ETXTBSY;
+                        MUNLOCK(mnp);
+                        break;
+                    }
                     /* mvfs_change_oid_subr() unlocks the MLOCK while it does
                     ** auditing and then reaquires it.  Things could have
                     ** changed while it was unlocked, but analysis seems to show
@@ -995,27 +999,27 @@ mvfs_openv_ctx(
                     ** have changed that much.  Besides, we redo the
                     ** mfs_getcleartext() call just below.
                     */
-		    error = mvfs_change_oid_subr(vp, mode, choidflag, 
+                    error = mvfs_change_oid_subr(vp, mode, choidflag, 
                             MFS_SLEEP, cd);
-		    if (error) {
-			mfs_clear_error(vp, "change oid failed", error);
-			MUNLOCK(mnp);
-			break;
-		    }
-		    /* Save write credentials for deferred operations */
-        	    MSETCRED(mnp, 1, MVFS_CD2CRED(cd));
-		} else {
-		    /* Save read credentials for deferred operations */
-		    MSETCRED(mnp, 0, MVFS_CD2CRED(cd));
-		}
+                    if (error) {
+                        mfs_clear_error(vp, "change oid failed", error);
+                        MUNLOCK(mnp);
+                        break;
+                    }
+                    /* Save write credentials for deferred operations */
+                    MSETCRED(mnp, 1, MVFS_CD2CRED(cd));
+                } else {
+                    /* Save read credentials for deferred operations */
+                    MSETCRED(mnp, 0, MVFS_CD2CRED(cd));
+                }
 
-		/* 
-		 * Get and hold cleartext after any choids 
-		 * Note that choid may have changed the cleartext vnode.
-		 */
+                /* 
+                 * Get and hold cleartext after any choids 
+                 * Note that choid may have changed the cleartext vnode.
+                 */
 
-		error = mfs_getcleartext(vp, &cvp, cd);
-		if (error) {
+                error = mfs_getcleartext(vp, &cvp, cd);
+                if (error) {
                     /* print error if even one other current open
                        (getcltxt logs if open_count > 1) */
                     if (error == ESTALE && mnp->mn_vob.open_count > 0)
@@ -1023,32 +1027,32 @@ mvfs_openv_ctx(
                     mvfs_log(MFS_LOG_DEBUG,
                        "mvfs_openv_ctx: 2nd mfs_getcleartext(%p) returned %d\n",
                         vp, error);
-		    MUNLOCK(mnp);
-		    break;
-		}
+                    MUNLOCK(mnp);
+                    break;
+                }
 
-		/* Open the cleartext in tandem with the vnode.
-	         * Many system count/match up various opens/closes, so
-		 * we do this to the cleartext.  
-	         * This also solves problems with file lock semantics 
-		 * that depend on correct open/close boundaries for the 
-		 * cleartext.
-		 * 
-		 * Once the cleartext vnode ptr is fetched, it isn't
-	         * released until the vnode is inactivated, no matter
-		 * what errors occur.
-		 * 
-		 * The MFS maintains an open_count in the mnode to tell
-		 * mfs_getcleartext() whether it is OK to rebind stale
-		 * cleartexts or not.  If the vnode is open, then the
-		 * cleartext can't be rebound, because we don't know
-		 * how many of each 'mode' of opens to perform for the
-		 * underlying file system, or what 'modes' of opens it
-		 * might care about.  This counter must be bumped
-		 * AFTER the getcleartext() above, during which it
-		 * is OK to rebind the cleartext if this is the first
-		 * open.
-		 */
+                /* Open the cleartext in tandem with the vnode.
+                 * Many system count/match up various opens/closes, so
+                 * we do this to the cleartext.  
+                 * This also solves problems with file lock semantics 
+                 * that depend on correct open/close boundaries for the 
+                 * cleartext.
+                 * 
+                 * Once the cleartext vnode ptr is fetched, it isn't
+                 * released until the vnode is inactivated, no matter
+                 * what errors occur.
+                 * 
+                 * The MFS maintains an open_count in the mnode to tell
+                 * mfs_getcleartext() whether it is OK to rebind stale
+                 * cleartexts or not.  If the vnode is open, then the
+                 * cleartext can't be rebound, because we don't know
+                 * how many of each 'mode' of opens to perform for the
+                 * underlying file system, or what 'modes' of opens it
+                 * might care about.  This counter must be bumped
+                 * AFTER the getcleartext() above, during which it
+                 * is OK to rebind the cleartext if this is the first
+                 * open.
+                 */
 ctxt_open:
 #ifdef NFSV4_SHADOW_VNODE
                 /* NFSv4 compliance: RATLC01011478: Saving the oid before
@@ -1060,15 +1064,15 @@ ctxt_open:
                  */
                 prev_oid = mnp->mn_vob.attr.obj_oid;
 #endif
-        	if (do_vop) {
-		    MDKI_HRTIME(&(alloc_unitp->stime1)); /* Fetch start time for stats */
-		    error = MVOP_OPEN(&cvp, mode, cd, ctxp);
+                if (do_vop) {
+                    MDKI_HRTIME(&(alloc_unitp->stime1)); /* Fetch start time for stats */
+                    error = MVOP_OPEN(&cvp, mode, cd, ctxp);
                     if (error) {
                         mvfs_log(MFS_LOG_DEBUG, "openv: mnode=%x error=%d\n", mnp, error);
                     }
-		    MVFS_BUMPTIME((alloc_unitp->stime1), (alloc_unitp->dtime),
+                    MVFS_BUMPTIME((alloc_unitp->stime1), (alloc_unitp->dtime),
                                  mfs_clearstat.clearopen_time);
-		    BUMPSTAT(mfs_clearstat.clearopen);
+                    BUMPSTAT(mfs_clearstat.clearopen);
                     /* RATLC00699167: NFSv3 caching causes atime to not be
                      * updated until next mod of file.  To prevent scrubber
                      * erroneously removing containers we are using but not
@@ -1106,10 +1110,10 @@ ctxt_open:
                             }
                         }
                     }
-		} else {
+                } else {
                     MDB_VLOG((MFS_VOPEN, "openv: MVOP_OPEN skipped vp=%x\n", cvp));
                 }
-		if (!error) {
+                if (!error) {
                     mnp->mn_vob.open_count++;
                     /*
                      * We need to tally number of opens
@@ -1127,7 +1131,7 @@ ctxt_open:
                      * different because of:
                      *  copy-on-write
                      */
-		    if (cvp != mnp->mn_hdr.realvp) {
+                    if (cvp != mnp->mn_hdr.realvp) {
 #ifdef NFSV4_SHADOW_VNODE
                         /* NFSv4 Compliance: RATLC01011478: NFSv4 protocol is
                          * stateful and implements the open and close procedures.
@@ -1185,8 +1189,8 @@ ctxt_open:
                                 mvfs_log(MFS_LOG_ERR, "open: unexpected multiple NFSv4 master vnodes. master1=%"
                                              KS_FMT_PTR_T", master2=%"KS_FMT_PTR_T"\n",
                                              mnp->mn_hdr.realvp_master, cvp);
-                                CVN_RELE(mnp->mn_hdr.realvp_master);
-				mnp->mn_hdr.realvp_master = NULL;
+                                CVN_RELE(mnp->mn_hdr.realvp_master, cd);
+                                mnp->mn_hdr.realvp_master = NULL;
                             } 
 
                             /* Increment the hold count on the master vnode to
@@ -1194,81 +1198,79 @@ ctxt_open:
                              */
                             CVN_HOLD(cvp);
 
-			    /* NFSv4 has transferred a reference count on the shadow
+                            /* NFSv4 has transferred a reference count on the shadow
                              * to a reference on the master vnode. That is the reference
                              * to be used here.
                              */
                             mnp->mn_hdr.realvp_master = cvp;
                         } else {
                             mvfs_log(MFS_LOG_ERR, "open: cleartext changed!\n");
-                            mvfs_new_cltxt(vp, cvp);
+                            mvfs_new_cltxt(vp, cvp, cd);
                         }
 #else
-			mvfs_log(MFS_LOG_ERR, "open: cleartext changed!\n");
-			/* 
-			 * Pass through of cleartext copy-on-write.
-			 * Release old cleartext vnode, and 
-			 * assign the new cleartext vnode, and take
-			 * an extra hold count for the assignment.
+                        mvfs_log(MFS_LOG_ERR, "open: cleartext changed!\n");
+                        /* 
+                         * Pass through of cleartext copy-on-write.
+                         * Release old cleartext vnode, and 
+                         * assign the new cleartext vnode, and take
+                         * an extra hold count for the assignment.
                          * We must inhibit any paging that could use
                          * the cleartext (without the mnode lock)
                          * when dropping the cleartext vnode (in those
                          * ports that need this protection)
-			 */
-                        mvfs_new_cltxt(vp, cvp);
+                         */
+                        mvfs_new_cltxt(vp, cvp, cd);
 #endif
-		    }
-		} else {
-		    /* If ESTALE, purge the current cleartext binding and
-		     * try again (once).  If our timing is bad, the scrubber may
-		     * have taken away our cleartext, even though the
-		     * revalidate timestamp says it is okay.
-		     */
-		    if (error == ESTALE && mnp->mn_vob.open_count == 0 && !ctxt_retry_done) {
-			mvfs_log(MFS_LOG_ESTALE,"open: retry stale cltxt, cvp %"KS_FMT_PTR_T"\n",cvp);
-			/*
-			 * mfs_getcleartext takes a reference on the VNODE. We
-			 * must release it before purging the cleartext.
-			 */
+                    }
+                } else {
+                    /* If ESTALE, purge the current cleartext binding and
+                     * try again (once).  If our timing is bad, the scrubber may
+                     * have taken away our cleartext, even though the
+                     * revalidate timestamp says it is okay.
+                     */
+                    if (error == ESTALE && mnp->mn_vob.open_count == 0 && !ctxt_retry_done) {
+                        mvfs_log(MFS_LOG_ESTALE,"open: retry stale cltxt, cvp %"KS_FMT_PTR_T"\n",cvp);
+                        /*
+                         * mfs_getcleartext takes a reference on the VNODE. We
+                         * must release it before purging the cleartext.
+                         */
 
-			CVN_RELE(cvp);
+                        CVN_RELE(cvp, cd);
 
-	   		mfs_clear_mark_name_purge(vp);
-	   		mfs_clear_rele(vp, MVFS_CD2CRED(cd));
-			if ((error = mfs_getcleartext(vp, &cvp, cd)) == 0) {
-			    ctxt_retry_done = TRUE;
-			    goto ctxt_open;
-			} else {
-			    mvfs_logperr(MFS_LOG_DEBUG,error,"open: retry can't get cltxt");
-		            mfs_clear_error(vp, "cleartext open retry failed", error);
+                        mfs_clear_mark_name_purge(vp);
+                        mfs_clear_rele(vp, cd);
+                        if ((error = mfs_getcleartext(vp, &cvp, cd)) == 0) {
+                            ctxt_retry_done = TRUE;
+                            goto ctxt_open;
+                        } else {
+                            mvfs_logperr(MFS_LOG_DEBUG,error,"open: retry can't get cltxt");
+                            mfs_clear_error(vp, "cleartext open retry failed", error);
                             /* XXX need to zero out cvp to avoid extra release below */
-		        } 
-		    } /* end ESTALE retry */
-		    else {
+                        } 
+                    } /* end ESTALE retry */
+                    else {
                         /* print error if even one other current open */
                         if (error == ESTALE && mnp->mn_vob.open_count > 0)
                             mvfs_clear_log_stale(vp);
-		        mfs_clear_error(vp, "cleartext open failed", error);
+                        mfs_clear_error(vp, "cleartext open failed", error);
                     }
-		}
+                }
+                /* Done with cleartext vnode from getcleartext for now */
 
-		/* Done with cleartext vnode from getcleartext for now */
-
-	    	if (cvp)
-		    CVN_RELE(cvp);
-	
-	        MUNLOCK(mnp);
-	    }
-	    break;
-	}
-	default:
-	    error = ENXIO;
-	    break;
+                if (cvp)
+                    CVN_RELE(cvp, cd);
+        
+                MUNLOCK(mnp);
+            }
+            break;
+        }
+        default:
+            error = ENXIO;
+            break;
     }
 
     /* Release an allocated bound root vnode */
-
-    if (vp != *vpp) VN_RELE(vp);
+    if (vp != *vpp) ATRIA_VN_RELE(vp, cd);
 
     MDB_VLOG((MFS_VOPEN,"vp=%"KS_FMT_PTR_T" mode=%x, err=%d\n",vp,mode,error));
     BUMPSTAT(mfs_vnopcnt[MFS_VOPEN]);
@@ -1299,25 +1301,25 @@ mfs_pre_closev(
     int error = 0;
 
     switch (VTOM(vp)->mn_hdr.mclass) {
-	case MFS_SDEVCLAS:
-	case MFS_LOOPCLAS:
-	case MFS_VIEWCLAS:
-	case MFS_NTVWCLAS:
-	case MFS_VIEWDIRCLAS:
-	    break;
+        case MFS_SDEVCLAS:
+        case MFS_LOOPCLAS:
+        case MFS_VIEWCLAS:
+        case MFS_NTVWCLAS:
+        case MFS_VIEWDIRCLAS:
+            break;
 
-	case MFS_VOBRTCLAS:
-	    vp = mfs_bindroot(vp, cd, &error);
-	    if (error) {
-		if (error == ESRCH) error = 0;	/* OK if no view */
-	    }
-	    break;
-	case MFS_VOBCLAS:
-	    break;
-	default:
-	    error = ENXIO;
-	    break;
-	}
+        case MFS_VOBRTCLAS:
+            vp = mfs_bindroot(vp, cd, &error);
+            if (error) {
+                if (error == ESRCH) error = 0;	/* OK if no view */
+            }
+            break;
+        case MFS_VOBCLAS:
+            break;
+        default:
+            error = ENXIO;
+            break;
+        }
 
     *bvpp = vp;
     return(error);
@@ -1332,7 +1334,7 @@ mfs_closev(
     CALL_DATA_T *cd
 )
 {
-	return(mvfs_closev_ctx(avp, flag, count, o, cd, NULL));
+        return(mvfs_closev_ctx(avp, flag, count, o, cd, NULL));
 }
 
 /* If something in the handling of a class changes here, make sure to check if
@@ -1365,63 +1367,61 @@ mvfs_closev_ctx(
     ASSERT(mnp->mn_hdr.vp);
 
     switch (mnp->mn_hdr.mclass) {
-	case MFS_SDEVCLAS:
-	    break;
-	case MFS_LOOPCLAS:
-	    /* 
-	     * Flush out pages on our vnode ptr to the cleartext
-	     * cache.  When the cleartext ptr is inactivated
-	     * the pages will go to net/disk.
-	     * THIS ONLY WORKS BECAUSE THERE IS NO CACHING OF
-	     * LOOPBACK CLEARTEXT VNODES.
-	     */
-	    if (MVFS_ISVTYPE(vp, VREG)) {
-	    	(void) PVN_FLUSH(vp, MFS_PVN_FLUSH, MVFS_CD2CRED(cd));
-	    }
-	    /* Fall through */
-	case MFS_VIEWCLAS:
-	    error = MVOP_CLOSE(MFS_CLRVP(vp), flag, count, o,
-                               MVFS_CD2CRED(cd), ctxp);
-	    if (error) goto errout;
-	    break;
-	case MFS_NTVWCLAS:
-	    error = 0;		/* Allow any close */
-	    goto errout;
-	    break;
-	case MFS_VIEWDIRCLAS:
-	    error = mfs_viewdirclose(vp, flag, 0, MVFS_CD2CRED(cd));
-	    if (error) goto errout;
-	    break;
-	case MFS_VOBRTCLAS:
-	    /* Should not happen since mfs_pre_closev() takes care of it. */
+        case MFS_SDEVCLAS:
+            break;
+        case MFS_LOOPCLAS:
+            /* 
+             * Flush out pages on our vnode ptr to the cleartext
+             * cache.  When the cleartext ptr is inactivated
+             * the pages will go to net/disk.
+             * THIS ONLY WORKS BECAUSE THERE IS NO CACHING OF
+             * LOOPBACK CLEARTEXT VNODES.
+             */
+            if (MVFS_ISVTYPE(vp, VREG)) {
+                (void) PVN_FLUSH(vp, MFS_PVN_FLUSH, cd);
+            }
+            /* Fall through */
+        case MFS_VIEWCLAS:
+            error = MVOP_CLOSE(MFS_CLRVP(vp), flag, count, o, cd, ctxp);
+            if (error) goto errout;
+            break;
+        case MFS_NTVWCLAS:
+            error = 0;		/* Allow any close */
+            goto errout;
+            break;
+        case MFS_VIEWDIRCLAS:
+            error = mfs_viewdirclose(vp, flag, 0, MVFS_CD2CRED(cd));
+            if (error) goto errout;
+            break;
+        case MFS_VOBRTCLAS:
+            /* Should not happen since mfs_pre_closev() takes care of it. */
 
-	    /* Fall through */
-	case MFS_VOBCLAS: {
+            /* Fall through */
+        case MFS_VOBCLAS: {
 
-	    /* 
+            /* 
              * No need to rebind the dir
-	     * Dirs do not have cleartext ... so nothing to do here.
+             * Dirs do not have cleartext ... so nothing to do here.
              */
 
-	    if (MVFS_ISVTYPE(vp, VDIR)) break;
-	
-	    /*
-	     * Sync any of our IO pages to cleartext.
-	     * (M)VOP_CLOSE is responsible for any "underlying" syncs
-	     * required for that FS.  Also flush any pages from the
-	     * page cache, since the file has been modified.
-	     */	
-	    if (MVFS_ISVTYPE(vp, VREG) && mnp->mn_hdr.cached_pages) {
-		need_flush = 1;
-		(void) PVN_FLUSH(vp, MFS_PVN_FLUSH|MFS_PVN_INVAL,
-                                 MVFS_CD2CRED(cd));
-	    }
+            if (MVFS_ISVTYPE(vp, VDIR)) break;
+        
+            /*
+             * Sync any of our IO pages to cleartext.
+             * (M)VOP_CLOSE is responsible for any "underlying" syncs
+             * required for that FS.  Also flush any pages from the
+             * page cache, since the file has been modified.
+             */	
+            if (MVFS_ISVTYPE(vp, VREG) && mnp->mn_hdr.cached_pages) {
+                need_flush = 1;
+                (void)PVN_FLUSH(vp, MFS_PVN_FLUSH|MFS_PVN_INVAL, cd);
+            }
             /* Do all the close manipulations (and counting) while holding our
             ** lock.  This code is similar to that in mfs_post_closev(), which
             ** used to be called below, but that meant we didn't lock around
             ** all the manipulations.
             */
-    	    MLOCK(mnp);
+            MLOCK(mnp);
 
 #ifdef NFSV4_SHADOW_VNODE
             /* NFSv4 Compliance: RATLC01011478: 'realvp_master' would be set
@@ -1433,33 +1433,33 @@ mvfs_closev_ctx(
             if (mnp->mn_hdr.realvp_master) cvp = mnp->mn_hdr.realvp_master;
             else cvp = MFS_CLRVP(vp);
 #else
-    	    cvp = MFS_CLRVP(vp);
+            cvp = MFS_CLRVP(vp);
 #endif
 
 
-    	    /* Close cleartext file. There should be one,
-	     * So log an error if not!  Save status of ctxt op, need it
-	     * to make decisions during post-processing.
-	     */
-	    if (!cvp) {
-		mvfs_log(MFS_LOG_ERR, "close: no cleartext vnode\n");
-	    } else {
-		if ((ct_stat = MVOP_CLOSE(cvp, flag, count, o,
-                               MVFS_CD2CRED(cd), ctxp)) != 0) { 
-		    mfs_clear_error(vp, "cleartext close failed", ct_stat); 
-		}
-	    }
-	    if (ct_stat == 0) {
-	        error = mvfs_sync_attr(mnp, NULL, MFS_USE_PROCBH, 
+            /* Close cleartext file. There should be one,
+             * So log an error if not!  Save status of ctxt op, need it
+             * to make decisions during post-processing.
+             */
+            if (!cvp) {
+                mvfs_log(MFS_LOG_ERR, "close: no cleartext vnode\n");
+            } else {
+                if ((ct_stat = MVOP_CLOSE(cvp, flag, count, o, cd, ctxp)) != 0)
+                {
+                    mfs_clear_error(vp, "cleartext close failed", ct_stat); 
+                }
+            }
+            if (ct_stat == 0) {
+                error = mvfs_sync_attr(mnp, NULL, MFS_USE_PROCBH, 
                                        MVFS_SATTR_ATIME_EROFS_OK, cd);
             }
-	    if (MVFS_IS_LASTCLOSE(count)) {
-	        mnp->mn_vob.open_count--;
+            if (MVFS_IS_LASTCLOSE(count)) {
+                mnp->mn_vob.open_count--;
                 if ((flag & FWRITE) == FWRITE) {
                     ASSERT(!MFS_CLRTEXT_RO(mnp));
                     mnp->mn_vob.open_wcount--;
                 }
-	    }
+            }
 
 #ifdef NFSV4_SHADOW_VNODE
             /* NFSv4 Compliance: RATLC01011478: If the open count is zero
@@ -1469,25 +1469,25 @@ mvfs_closev_ctx(
              */
             if ((mnp->mn_vob.open_count == 0) &&
                     (mnp->mn_hdr.realvp_master != NULL)) {
-                CVN_RELE(mnp->mn_hdr.realvp_master);
-		mnp->mn_hdr.realvp_master = NULL;
+                CVN_RELE(mnp->mn_hdr.realvp_master, cd);
+                mnp->mn_hdr.realvp_master = NULL;
             }
 #endif
 
-	    MUNLOCK(mnp);
-	    break;
-	}
-	default:
-	    error = ENXIO;
-	    goto errout;
-	    break;
+            MUNLOCK(mnp);
+            break;
+        }
+        default:
+            error = ENXIO;
+            goto errout;
+            break;
     }
 
 errout:
 
     /* Release an allocated bound root vnode */
 
-    if (vp != avp) VN_RELE(vp);
+    if (vp != avp) ATRIA_VN_RELE(vp, cd);
 
     MDB_VLOG((MFS_VCLOSE,"vp=%"KS_FMT_PTR_T" flag=%x, cnt=%x, pid=%d err=%d\n",vp,flag,count,MDKI_CURPID(),error));
     BUMPSTAT(mfs_vnopcnt[MFS_VCLOSE]);
@@ -1550,7 +1550,7 @@ mvfs_pre_rdwr(
     /* Disallow IO on dir objects.  */
 
     if (MVFS_ISVTYPE(vp, VDIR)) {
-	return(EISDIR);
+        return(EISDIR);
     }
 
     if (rw == UIO_WRITE && (vp->v_vfsp->vfs_flag & VFS_RDONLY) != 0) {
@@ -1566,7 +1566,7 @@ mvfs_pre_rdwr(
        read either.... */
 
     if (MVFS_IS_INVALID_OFFSET(MVFS_UIO_OFFSET(uiop))) {
-	return(EINVAL);
+        return(EINVAL);
     }
 
     /* Save previous 'count' for logging/debugging */
@@ -1578,22 +1578,21 @@ mvfs_pre_rdwr(
        objects and so no check is needed below */
 
     switch (VTOM(vp)->mn_hdr.mclass) {
-	case MFS_SDEVCLAS:
-	    error = 0;		/* Nothing to read/write */
-	    break;
-	case MFS_LOOPCLAS:	/* Return real vnode for IO */
-	    error = 0;
+        case MFS_SDEVCLAS:
+            error = 0;		/* Nothing to read/write */
+            break;
+        case MFS_LOOPCLAS:	/* Return real vnode for IO */
+            error = 0;
             *cvpp = MFS_CLRVP(vp);
             CVN_HOLD(*cvpp);
-	    if (rw == UIO_WRITE) {
-	      MVOP_RWWRLOCK(*cvpp, ctxp);
-	    }
-	    else {
-	      MVOP_RWRDLOCK(*cvpp, ctxp);
-	    }
-	    break;
-	case MFS_VOBCLAS: {
-
+            if (rw == UIO_WRITE) {
+              MVOP_RWWRLOCK(*cvpp, ctxp);
+            }
+            else {
+              MVOP_RWRDLOCK(*cvpp, ctxp);
+            }
+            break;
+        case MFS_VOBCLAS: {
             MVFS_RDWR_GET_MAXOFF(vp, uiop, max_offset, ctxp);
 
             /*
@@ -1611,89 +1610,89 @@ mvfs_pre_rdwr(
                 error = EINVAL;
             } else if (MVFS_UIO_OFFSET(uiop) >= max_offset) {
 
-	        if (rw == UIO_WRITE) {		
-		    error = EFBIG;
+                if (rw == UIO_WRITE) {		
+                    error = EFBIG;
                 } else {
-		    error = EOVERFLOW;
+                    error = EOVERFLOW;
                 }
-		break;
-	    }
+                break;
+            }
 
-    	    mnp = VTOM(vp);
+            mnp = VTOM(vp);
 
-    	    /* NFS and executables access the file without an
-       	       open so get the cleartext here if required */
+            /* NFS and executables access the file without an
+               open so get the cleartext here if required */
 
-   	    MLOCK(mnp);
+            MLOCK(mnp);
 
-	    /* 
-	     * Getcleartext will validate/refetch the cleartext
-	     * if it is stale.
-	     */
-	    error = mfs_getcleartext(vp, cvpp, cd);
-	    if (error) {
-		MUNLOCK(mnp);
-		break;
-	    }
-	    ASSERT(*cvpp != NULL);
+            /* 
+             * Getcleartext will validate/refetch the cleartext
+             * if it is stale.
+             */
+            error = mfs_getcleartext(vp, cvpp, cd);
+            if (error) {
+                MUNLOCK(mnp);
+                break;
+            }
+            ASSERT(*cvpp != NULL);
 
-	    /*
-	     * Choid the object if required on writes.
-	     */
+            /*
+             * Choid the object if required on writes.
+             */
 
-	    if (rw == UIO_WRITE) {		
-		/* 
-		 * Before choid, make sure cleartext is writable.
-		 * Any copy-on-write should have been done in open!
-		 */
-		if (!mfs_clear_writable(vp)) {
-		    MUNLOCK(mnp);
-		    error = EROFS;
-		    break;
-		}
+            if (rw == UIO_WRITE) {		
+                /* 
+                 * Before choid, make sure cleartext is writable.
+                 * Any copy-on-write should have been done in open!
+                 */
+                if (!mfs_clear_writable(vp)) {
+                    MUNLOCK(mnp);
+                    error = EROFS;
+                    break;
+                }
 
-		/* 
-		 * Choid the cleartext now, we are writing it.
-	 	 * The mfs_change_oid subroutine will decide if a 
-		 * choid is really needed or not.
+                /* 
+                 * Choid the cleartext now, we are writing it.
+                 * The mfs_change_oid subroutine will decide if a 
+                 * choid is really needed or not.
                  */
 
-	        error = mfs_change_oid(vp, 0, MFS_SLEEP, cd);
-	        if (error) {
-		    MUNLOCK(mnp);
-		    break;
-	        }
+                error = mfs_change_oid(vp, 0, MFS_SLEEP, cd);
+                if (error) {
+                    MUNLOCK(mnp);
+                    break;
+                }
 
-		/* 
-		 * Since we checked for RO cleartext above, the
-		 * cleartext vnode shouldn't have changed in
-		 * the choid call.  Verify this!
-		 */
+                /* 
+                 * Since we checked for RO cleartext above, the
+                 * cleartext vnode shouldn't have changed in
+                 * the choid call.  Verify this!
+                 */
 
-		if (*cvpp != mnp->mn_hdr.realvp) {
-		    mvfs_log(MFS_LOG_ERR, "rdwr: unexpected copy-on-write\n");
-		    error = ENXIO;
-		    MUNLOCK(mnp);
-		    break;
-		}
-	    }
+                if (*cvpp != mnp->mn_hdr.realvp) {
+                    mvfs_log(MFS_LOG_ERR, "rdwr: unexpected copy-on-write\n");
+                    error = ENXIO;
+                    MUNLOCK(mnp);
+                    break;
+                }
+            }
 
-	    /* Unlock around the IO */
+            /* Unlock around the IO */
 
-    	    MUNLOCK(mnp);
+            MUNLOCK(mnp);
 
-	    /* Acquire I/O lock for cleartext file */
-	    if (rw == UIO_WRITE) {
-	      MVOP_RWWRLOCK(*cvpp, ctxp);
-	    }
-	    else {
-	      MVOP_RWRDLOCK(*cvpp, ctxp);
-	    }
-	    break;
-	}
-	default:
-	    error = ENXIO;
-	    break;
+            /* Acquire I/O lock for cleartext file */
+            if (rw == UIO_WRITE) {
+              MVOP_RWWRLOCK(*cvpp, ctxp);
+            }
+            else {
+              MVOP_RWRDLOCK(*cvpp, ctxp);
+            }
+            break;
+        }
+        default:
+            error = ENXIO;
+            break;
     }
     return (error);
 }
@@ -1722,91 +1721,91 @@ mvfs_post_rdwr(
     ASSERT(mnp->mn_hdr.vp);
 
     switch (VTOM(vp)->mn_hdr.mclass) {
-	case MFS_SDEVCLAS:
-	    break;
-	case MFS_LOOPCLAS:	/* Release RW lock and refcount on vnode */
-	    if (rw == UIO_WRITE) {
-	      MVOP_RWWRUNLOCK(cvp, ctxp);
-	    }
-	    else {
-	      MVOP_RWRDUNLOCK(cvp, ctxp);
-	    }
-	    CVN_RELE(cvp);
-	    break;
-	case MFS_VOBCLAS: {
-	    if (rw == UIO_WRITE) {
-	      MVOP_RWWRUNLOCK(cvp, ctxp);
-	    }
-	    else {
-	      MVOP_RWRDUNLOCK(cvp, ctxp);
-	    }
-	    CVN_RELE(cvp);
+        case MFS_SDEVCLAS:
+            break;
+        case MFS_LOOPCLAS:	/* Release RW lock and refcount on vnode */
+            if (rw == UIO_WRITE) {
+              MVOP_RWWRUNLOCK(cvp, ctxp);
+            }
+            else {
+              MVOP_RWRDUNLOCK(cvp, ctxp);
+            }
+            CVN_RELE(cvp, cd);
+            break;
+        case MFS_VOBCLAS: {
+            if (rw == UIO_WRITE) {
+              MVOP_RWWRUNLOCK(cvp, ctxp);
+            }
+            else {
+              MVOP_RWRDUNLOCK(cvp, ctxp);
+            }
+            CVN_RELE(cvp, cd);
 
-    	    /* 
-	     * On successful IO, save credentials, set dirty bit,
-       	     * and update V.3 inode if required. 
-	     * 
-	     * Log any "incomplete" writes as a "cleartext" error.
-	     * This is because POSIX says that when the disk gets
-	     * full, but some data can be written, a success is
-	     * returned with only some bytes written.  Usually this
-	     * results in a bogus file, and we want to warn the
-	     * user so he won't blame the MFS.
-	     *
-	     * Allow EINTR to support partial transfers on EINTR.
-  	     */
+            /* 
+             * On successful IO, save credentials, set dirty bit,
+             * and update V.3 inode if required. 
+             * 
+             * Log any "incomplete" writes as a "cleartext" error.
+             * This is because POSIX says that when the disk gets
+             * full, but some data can be written, a success is
+             * returned with only some bytes written.  Usually this
+             * results in a bogus file, and we want to warn the
+             * user so he won't blame the MFS.
+             *
+             * Allow EINTR to support partial transfers on EINTR.
+             */
 
-	    MLOCK(mnp);
-    	    if (!error || (error == EINTR)) {
+            MLOCK(mnp);
+            if (!error || (error == EINTR)) {
                 int err;
-	    	if (rw == UIO_WRITE) {
-		    BUMPSTAT(mfs_clearstat.clearwrite);
-		    if (uiop->uio_resid > 0) {
+                if (rw == UIO_WRITE) {
+                    BUMPSTAT(mfs_clearstat.clearwrite);
+                    if (uiop->uio_resid > 0) {
 
 
                         mvfs_log(MFS_LOG_DEBUG, 
                                  "incomplete cleartext write for vp: %"KS_FMT_PTR_T" error:%d \n", 
                                   vp,error);
-		    }
-	    	    MSETCRED(mnp, 1, MVFS_CD2CRED(cd));
-	    	    mnp->mn_hdr.clear_dirty = 1;
+                    }
+                    MSETCRED(mnp, 1, MVFS_CD2CRED(cd));
+                    mnp->mn_hdr.clear_dirty = 1;
 
-		    /* 
-		     * Update wrapper idea of size and modification state
-   		     * if required by the port 
-   		     */
+                    /* 
+                     * Update wrapper idea of size and modification state
+                     * if required by the port 
+                     */
 
-		    err = MVFS_WRAP_SYNC_SIZE(vp, MVFS_UIO_OFFSET(uiop), FALSE);
+                    err = MVFS_WRAP_SYNC_SIZE(vp, MVFS_UIO_OFFSET(uiop), FALSE);
                     if (err == 0)
                         err = MVFS_WRAP_SET_MODIFIED(vp);
-		    if (err == 0)
+                    if (err == 0)
                         err = MVFS_WRAP_SET_INODE_CHANGED(vp);
-	   	} else {
-	            BUMPSTAT(mfs_clearstat.clearread);
-	    	    MSETCRED(mnp, 0, MVFS_CD2CRED(cd));
-		    err = MVFS_WRAP_SET_ACCESSED(vp);
-		}
+                } else {
+                    BUMPSTAT(mfs_clearstat.clearread);
+                    MSETCRED(mnp, 0, MVFS_CD2CRED(cd));
+                    err = MVFS_WRAP_SET_ACCESSED(vp);
+                }
                 if (error == 0)
                     error = err;    /* pass error back if it's new */
-	    } else {
-		mfs_clear_error(vp, rw == UIO_WRITE ? "cleartext write failed" : "cleartext read failed", error);
+            } else {
+                mfs_clear_error(vp, rw == UIO_WRITE ? "cleartext write failed" : "cleartext read failed", error);
                 /* check use count > 1:  if we're the only reference, don't
                    complain that someone else has it open */
                 if (error == ESTALE && mnp->mn_vob.open_count > 1)
                     mvfs_clear_log_stale(vp);
-	    }
-	    MUNLOCK(mnp);
-	    break;
-	}
-	default:
-	    MDKI_PANIC("mvfs_post_rdwr: invalid vnode class");
-	    break;	/* Never reached */
+            }
+            MUNLOCK(mnp);
+            break;
+        }
+        default:
+            MDKI_PANIC("mvfs_post_rdwr: invalid vnode class");
+            break;	/* Never reached */
     }
 
     /* Do audit if no error */
 
     if (!error) {
-	MFS_AUDIT((rw == UIO_READ) ? MFS_AR_READ : MFS_AR_WRITE, NULL,NULL,NULL,NULL,vp,cd);
+        MFS_AUDIT((rw == UIO_READ) ? MFS_AR_READ : MFS_AR_WRITE, NULL,NULL,NULL,NULL,vp,cd);
     }
 
     MDB_VLOG((MFS_VRDWR,"vp=%"KS_FMT_PTR_T
@@ -1817,9 +1816,9 @@ mvfs_post_rdwr(
               vp, MVFS_UIO_OFFSET(uiop), rw, uc, uiop->uio_resid, error));
 #ifdef MVFS_DEBUG
     if (uiop->uio_resid > uc) {
-	MVFS_PRINTF("MFS resid failure, write errno=%d\n", error);
-	MVFS_PRINTF("orig resid=0x%"MVFS_FMT_SSIZE_T_X"   new resid = 0x%"MVFS_FMT_UIO_RESID_X"   offset=0x%"MVFS_FMT_UIO_OFFSET_X"\n", 
-		    uc, uiop->uio_resid, MVFS_UIO_OFFSET(uiop));
+        MVFS_PRINTF("MFS resid failure, write errno=%d\n", error);
+        MVFS_PRINTF("orig resid=0x%"MVFS_FMT_SSIZE_T_X"   new resid = 0x%"MVFS_FMT_UIO_RESID_X"   offset=0x%"MVFS_FMT_UIO_OFFSET_X"\n", 
+                    uc, uiop->uio_resid, MVFS_UIO_OFFSET(uiop));
     }
 #endif
     ASSERT(uiop->uio_resid <= uc);
@@ -1888,16 +1887,16 @@ mvfs_rdwr_ctx(
      */
 
     switch (VTOM(vp)->mn_hdr.mclass) {
-	case MFS_SDEVCLAS:
-	    error = 0;		/* Nothing to read/write */
-	    break;
-	case MFS_LOOPCLAS:	/* Pass on to real vnode */
-	    if (rw == UIO_READ)
-		error = MVOP_READ(MVFS_CVP_TO_VP(cvp), uiop, ioflag, vap, cd, ctxp);
-	    else 
-		error = MVOP_WRITE(MVFS_CVP_TO_VP(cvp), uiop, ioflag, vap, cd, ctxp);
-	    break;
-	case MFS_VOBCLAS: {
+        case MFS_SDEVCLAS:
+            error = 0;		/* Nothing to read/write */
+            break;
+        case MFS_LOOPCLAS:	/* Pass on to real vnode */
+            if (rw == UIO_READ)
+                error = MVOP_READ(MVFS_CVP_TO_VP(cvp), uiop, ioflag, vap, cd, ctxp);
+            else 
+                error = MVOP_WRITE(MVFS_CVP_TO_VP(cvp), uiop, ioflag, vap, cd, ctxp);
+            break;
+        case MFS_VOBCLAS: {
             MOFFSET_T max_offset;
             MOFFSET_T max_resid;
             MOFFSET_T adj_resid;
@@ -1917,29 +1916,29 @@ mvfs_rdwr_ctx(
                 uiop->uio_resid = (MVFS_UIO_RESID_T) max_resid;
             }
 
-	    MDKI_HRTIME(&stime);	/* Fetch start time for stats */
-	    if (rw == UIO_READ)
-		error = MVOP_READ(MVFS_CVP_TO_VP(cvp), uiop, ioflag, vap, cd, ctxp);
-	    else
-	        error = MVOP_WRITE(MVFS_CVP_TO_VP(cvp), uiop, ioflag, vap, cd, ctxp);
- 	    if (!error || error == EINTR) {
-	    	if (rw == UIO_WRITE) {
-		    MVFS_BUMPTIME(stime, dtime, mfs_clearstat.clearwr_time);
-	   	} else {
-		    MVFS_BUMPTIME(stime, dtime, mfs_clearstat.clearrd_time);
-		}
-	    }
+            MDKI_HRTIME(&stime);	/* Fetch start time for stats */
+            if (rw == UIO_READ)
+                error = MVOP_READ(MVFS_CVP_TO_VP(cvp), uiop, ioflag, vap, cd, ctxp);
+            else
+                error = MVOP_WRITE(MVFS_CVP_TO_VP(cvp), uiop, ioflag, vap, cd, ctxp);
+            if (!error || error == EINTR) {
+                if (rw == UIO_WRITE) {
+                    MVFS_BUMPTIME(stime, dtime, mfs_clearstat.clearwr_time);
+                } else {
+                    MVFS_BUMPTIME(stime, dtime, mfs_clearstat.clearrd_time);
+                }
+            }
 
             /*
              * Adjust for value not read if crosses max boundary.
              */
 
-	    uiop->uio_resid += (MVFS_UIO_RESID_T) adj_resid;
-	    break;
-	}
-	default:
-	    MDKI_PANIC("mfs_rdwr on invalid vnode type");
-	    break;	/* Shouldn't reach here */
+            uiop->uio_resid += (MVFS_UIO_RESID_T) adj_resid;
+            break;
+        }
+        default:
+            MDKI_PANIC("mfs_rdwr on invalid vnode type");
+            break;	/* Shouldn't reach here */
     }
 
     /* Do post-I/O processing */
@@ -1956,11 +1955,11 @@ done:
     BUMPSTAT(mfs_vnopcnt[MFS_VRDWR]);
     MVFS_EXIT_FS(mth);
     if (VTOM(vp)->mn_hdr.mclass == MFS_VOBCLAS && (!error || error == EINTR)) {
-	if (rw == UIO_READ) {
-	    MVFS_BUMPTIME(stime1, dtime, mfs_clearstat.unclearrd_time);
-	} else {
-	    MVFS_BUMPTIME(stime1, dtime, mfs_clearstat.unclearwr_time);
-	}
+        if (rw == UIO_READ) {
+            MVFS_BUMPTIME(stime1, dtime, mfs_clearstat.unclearrd_time);
+        } else {
+            MVFS_BUMPTIME(stime1, dtime, mfs_clearstat.unclearwr_time);
+        }
     }
     return (error);
 }
@@ -1970,130 +1969,136 @@ struct {
     long mininfolen;	/* min infolen reqd */
     long maxinfolen;	/* max infolen reqd */
 } mvfs_ioctl_valid_table[] = {
-	/* MVFS_CMD_GET_VIEWINFO 1 */
-	{TRUE, sizeof(mvfs_viewinfo_t), sizeof(mvfs_viewinfo_t)},
-	/* MVFS_CMD_XSTAT 2 */
-	{TRUE, sizeof(mvfs_xstat_t), sizeof(mvfs_xstat_t)},
-	/* MVFS_CMD_GET_CLRNAME 3 */
-	{TRUE, sizeof(mvfs_clrname_info_t), sizeof(mvfs_clrname_info_t)},
-	/* MVFS_CMD_GET_VFH 4 */
-	{TRUE, sizeof(mvfs_iovfh_t), sizeof(mvfs_iovfh_t)},
-	/* MVFS_CMD_IOINVAL 5 */
-	{TRUE, sizeof(mvfs_ioinval_t), sizeof(mvfs_ioinval_t)},
-	/* MVFS_CMD_REVALIDATE 6 */
-	{TRUE, 0, 0},
-	/* MVFS_CMD_MKVIEWTAG 7 */
-	{TRUE, sizeof(mvfs_mkviewtag_info_t), sizeof(mvfs_mkviewtag_info_t)},
-	/* MVFS_CMD_RMVIEWTAG 8 */
-	{TRUE, sizeof(mvfs_viewtag_info_t), sizeof(mvfs_viewtag_info_t)},
-	/* MVFS_CMD_GET_VIEWADDR 9 */
-	{TRUE, sizeof(mvfs_viewaddr_t), sizeof(mvfs_viewaddr_t)},
-	/* MVFS_CMD_GET_VOBINFO 10 */
-	{TRUE, sizeof(mvfs_vobinfo_t), sizeof(mvfs_vobinfo_t)},
-	/* MVFS_CMD_GET_VIEWTAG_DIR 11 */
-	{TRUE, sizeof(mfs_strbufpn_pair_t), sizeof(mfs_strbufpn_pair_t)},
-	/* MVFS_CMD_CHANGE_MTYPE 12 */
-	{TRUE, sizeof(mvfs_iochange_mtype_t), sizeof(mvfs_iochange_mtype_t)},
-	/* MVFS_CMD_GET_AFILE 13 */
-	{TRUE, sizeof(mfs_strbufpn_t), sizeof(mfs_strbufpn_t)},
-	/* MVFS_CMD_SET_AFILE 14 */
-	{TRUE, sizeof(mfs_strbufpn_pair_t), sizeof(mfs_strbufpn_pair_t)},
-	/* MVFS_CMD_GET_PROCF 15 */
-	{TRUE, sizeof(u_long), sizeof(u_long)},
-	/* MVFS_CMD_SET_PROCF 16 */
-	{TRUE, sizeof(u_long), sizeof(u_long)},
-	/* MVFS_CMD_START_AUDIT 17 */
-	{TRUE, sizeof(u_long), sizeof(u_long)},
-	/* MVFS_CMD_STOP_AUDIT 18 */
-	{TRUE, 0, 0},
-	/* MVFS_CMD_SYNC_AUDIT 19 */
-	{TRUE, 0, 0},
-	/* MVFS_CMD_GET_VXSUFFIX 20 */
-	{TRUE, sizeof(mfs_strbuf_t), sizeof(mfs_strbuf_t)},
-	/* MVFS_CMD_GET_CACHE_ENB 21 */
-	{TRUE, sizeof(u_long), sizeof(u_long)},
-	/* MVFS_CMD_SET_CACHE_ENB 22 */
-	{TRUE, sizeof(u_long), sizeof(u_long)},
-	/* MVFS_CMD_FLUSH_CACHE 23 */
-	{TRUE, sizeof(u_long), sizeof(u_long)},
-	/* MVFS_CMD_READ_DNC 24 */
-	{TRUE, sizeof(mfs_ioncent_t), sizeof(mfs_ioncent_t)},
-	/* MVFS_CMD_GET_RCSID 25 */
-	{TRUE, -1L, -1L},
-	/* MVFS_CMD_GET_SCCSID 26 */
-	{TRUE, -1L, -1L},
-	/* MVFS_CMD_GET_LOGINFO 27 */
-	{TRUE, sizeof(mvfs_loginfo_t), sizeof(mvfs_loginfo_t)},
-	/* MVFS_CMD_SET_LOGINFO 28 */
-	{TRUE, sizeof(mvfs_loginfo_t), sizeof(mvfs_loginfo_t)},
-	/* MVFS_CMD_GET_BH 29 */
-	{TRUE, sizeof(mvfs_bhinfo_t), sizeof(mvfs_bhinfo_t)},
-	/* MVFS_CMD_SET_BH 30 */
-	{TRUE, sizeof(mvfs_bhinfo_t), sizeof(mvfs_bhinfo_t)},
-	/* MVFS_CMD_GET_STATS 31 */
-	{TRUE, sizeof(mvfs_statbufs_t), sizeof(mvfs_statbufs_t)},
-	/* MVFS_CMD_SETPROCVIEW 32 */
-	{TRUE, sizeof(mvfs_viewtag_info_t), sizeof(mvfs_viewtag_info_t)},
-	/* MVFS_CMD_GET_PROCVIEWINFO 33 */
-	{TRUE, sizeof(mvfs_viewinfo_t), sizeof(mvfs_viewinfo_t)},
-	/* MVFS_CMD_GET_XATTR 34 */
-	{TRUE, sizeof(mvfs_io_xattr_t), sizeof(mvfs_io_xattr_t)},
-	/* MVFS_CMD_SET_XATTR 35 */
-	{TRUE, sizeof(mvfs_io_xattr_t), sizeof(mvfs_io_xattr_t)},
-	/* MVFS_CMD_MOUNT 36 */
-	{TRUE, sizeof(struct mfs_mntargs), sizeof(struct mfs_mntargs)},
-	/* MVFS_CMD_UNMOUNT 37 */
-	{TRUE, sizeof(mvfs_unmount_info_t), sizeof(mvfs_unmount_info_t)},
-	/* MVFS_CMD_RMALLVIEWTAGS 38 */
-	{TRUE, 0, 0},
-	/* MVFS_CMD_UMOUNTALL 39 */
-	{TRUE, 0, 0},
-	/* MVFS_CMD_GET_POOLMAPS 40 */
-	{TRUE, sizeof(mvfs_ioget_poolmaps_t), sizeof(mvfs_ioget_poolmaps_t)},
-	/* MVFS_CMD_VDM 41 */
-	{FALSE,0,0},
-	/* MVFS_CMD_ABORT 42 */
-	{TRUE, 0, 0},
-	/* MVFS_CMD_EXPORTVIEWTAG 43 */
-	{TRUE, sizeof(mvfs_export_viewinfo_t), sizeof(mvfs_export_viewinfo_t)},
-	/* MVFS_CMD_UNEXPORTVIEWTAG 44 */
-	{TRUE, sizeof(mvfs_viewtag_info_t), sizeof(mvfs_viewtag_info_t)},
-	/* MVFS_CMD_ZERO_STATS 45 */
-	{TRUE, 0, 0},
-	/* MVFS_CMD_GET_CACHE_USAGE 46 */
-	{TRUE, sizeof(mvfs_cache_usage_t), sizeof(mvfs_cache_usage_t)},
-	/* MVFS_CMD_SET_CACHE_SIZES 47 */
-	{TRUE, sizeof(mvfs_cache_sizes_t), sizeof(mvfs_cache_sizes_t)},
-	/* MVFS_CMD_AUDIT_MARKER 48 */
-	{TRUE, sizeof(u_long), sizeof(u_long)},
-	/* MVFS_CMD_IOD_NULL 49 */
-	{FALSE, 0, 0},
-	/* MVFS_CMD_GET_VIEW_STATS 50 */
-	{TRUE, sizeof(mvfs_viewstats_t), sizeof(mvfs_viewstats_t)},
-	/* MVFS_CMD_ZERO_VIEW_STATS 51 */
-	{TRUE, sizeof(mvfs_zero_viewstat_t), sizeof(mvfs_zero_viewstat_t)},
-	/* MVFS_CMD_SIDHOST_CREDMAPPING 52 */
-	{TRUE, sizeof(mvfs_sidhost_cred_t), sizeof(mvfs_sidhost_cred_t)},
-	/* MVFS_CMD_DELETE_SIDHOST_CREDMAPPING 53 */
-	{TRUE, sizeof(mvfs_sid_t), sizeof(mvfs_sid_t)},
-	/* MVFS_CMD_GET_VIEWTAG_EXPORT 54 */
-	{TRUE, sizeof(mvfs_export_viewinfo_t), sizeof(mvfs_export_viewinfo_t)},
-	/* MVFS_CMD_GET_GFSINFO 55 */
-	{TRUE, sizeof(mvfs_gfsinfo_t), sizeof(mvfs_gfsinfo_t)},
-	/* MVFS_CMD_SET_VOBRT_VFSMNT 56 */
-	{TRUE, sizeof(mfs_strbufpn_pair_t), sizeof(mfs_strbufpn_pair_t)},
-	/* MVFS_CMD_GET_CACHE_SIZES 57 */
-	{TRUE, sizeof(mvfs_cache_sizes_t), sizeof(mvfs_cache_sizes_t)},
+        /* MVFS_CMD_GET_VIEWINFO 1 */
+        {TRUE, sizeof(mvfs_viewinfo_t), sizeof(mvfs_viewinfo_t)},
+        /* MVFS_CMD_XSTAT 2 */
+        {TRUE, sizeof(mvfs_xstat_t), sizeof(mvfs_xstat_t)},
+        /* MVFS_CMD_GET_CLRNAME 3 */
+        {TRUE, sizeof(mvfs_clrname_info_t), sizeof(mvfs_clrname_info_t)},
+        /* MVFS_CMD_GET_VFH 4 */
+        {TRUE, sizeof(mvfs_iovfh_t), sizeof(mvfs_iovfh_t)},
+        /* MVFS_CMD_IOINVAL 5 */
+        {TRUE, sizeof(mvfs_ioinval_t), sizeof(mvfs_ioinval_t)},
+        /* MVFS_CMD_REVALIDATE 6 */
+        {TRUE, 0, 0},
+        /* MVFS_CMD_MKVIEWTAG 7 */
+        {TRUE, sizeof(mvfs_mkviewtag_info_t), sizeof(mvfs_mkviewtag_info_t)},
+        /* MVFS_CMD_RMVIEWTAG 8 */
+        {TRUE, sizeof(mvfs_viewtag_info_t), sizeof(mvfs_viewtag_info_t)},
+        /* MVFS_CMD_GET_VIEWADDR 9 */
+        {TRUE, sizeof(mvfs_viewaddr_t), sizeof(mvfs_viewaddr_t)},
+        /* MVFS_CMD_GET_VOBINFO 10 */
+        {TRUE, sizeof(mvfs_vobinfo_t), sizeof(mvfs_vobinfo_t)},
+        /* MVFS_CMD_GET_VIEWTAG_DIR 11 */
+        {TRUE, sizeof(mfs_strbufpn_pair_t), sizeof(mfs_strbufpn_pair_t)},
+        /* MVFS_CMD_CHANGE_MTYPE 12 */
+        {TRUE, sizeof(mvfs_iochange_mtype_t), sizeof(mvfs_iochange_mtype_t)},
+        /* MVFS_CMD_GET_AFILE 13 */
+        {TRUE, sizeof(mfs_strbufpn_t), sizeof(mfs_strbufpn_t)},
+        /* MVFS_CMD_SET_AFILE 14 */
+        {TRUE, sizeof(mfs_strbufpn_pair_t), sizeof(mfs_strbufpn_pair_t)},
+        /* MVFS_CMD_GET_PROCF 15 */
+        {TRUE, sizeof(u_long), sizeof(u_long)},
+        /* MVFS_CMD_SET_PROCF 16 */
+        {TRUE, sizeof(u_long), sizeof(u_long)},
+        /* MVFS_CMD_START_AUDIT 17 */
+        {TRUE, sizeof(u_long), sizeof(u_long)},
+        /* MVFS_CMD_STOP_AUDIT 18 */
+        {TRUE, 0, 0},
+        /* MVFS_CMD_SYNC_AUDIT 19 */
+        {TRUE, 0, 0},
+        /* MVFS_CMD_GET_VXSUFFIX 20 */
+        {TRUE, sizeof(mfs_strbuf_t), sizeof(mfs_strbuf_t)},
+        /* MVFS_CMD_GET_CACHE_ENB 21 */
+        {TRUE, sizeof(u_long), sizeof(u_long)},
+        /* MVFS_CMD_SET_CACHE_ENB 22 */
+        {TRUE, sizeof(u_long), sizeof(u_long)},
+        /* MVFS_CMD_FLUSH_CACHE 23 */
+        {TRUE, sizeof(u_long), sizeof(u_long)},
+        /* MVFS_CMD_READ_DNC 24 */
+        {TRUE, sizeof(mfs_ioncent_t), sizeof(mfs_ioncent_t)},
+        /* MVFS_CMD_GET_RCSID 25 */
+        {TRUE, -1L, -1L},
+        /* MVFS_CMD_GET_SCCSID 26 */
+        {TRUE, -1L, -1L},
+        /* MVFS_CMD_GET_LOGINFO 27 */
+        {TRUE, sizeof(mvfs_loginfo_t), sizeof(mvfs_loginfo_t)},
+        /* MVFS_CMD_SET_LOGINFO 28 */
+        {TRUE, sizeof(mvfs_loginfo_t), sizeof(mvfs_loginfo_t)},
+        /* MVFS_CMD_GET_BH 29 */
+        {TRUE, sizeof(mvfs_bhinfo_t), sizeof(mvfs_bhinfo_t)},
+        /* MVFS_CMD_SET_BH 30 */
+        {TRUE, sizeof(mvfs_bhinfo_t), sizeof(mvfs_bhinfo_t)},
+        /* MVFS_CMD_GET_STATS 31 */
+        {TRUE, sizeof(mvfs_statbufs_t), sizeof(mvfs_statbufs_t)},
+        /* MVFS_CMD_SETPROCVIEW 32 */
+        {TRUE, sizeof(mvfs_viewtag_info_t), sizeof(mvfs_viewtag_info_t)},
+        /* MVFS_CMD_GET_PROCVIEWINFO 33 */
+        {TRUE, sizeof(mvfs_viewinfo_t), sizeof(mvfs_viewinfo_t)},
+        /* MVFS_CMD_GET_XATTR 34 */
+        {TRUE, sizeof(mvfs_io_xattr_t), sizeof(mvfs_io_xattr_t)},
+        /* MVFS_CMD_SET_XATTR 35 */
+        {TRUE, sizeof(mvfs_io_xattr_t), sizeof(mvfs_io_xattr_t)},
+        /* MVFS_CMD_MOUNT 36 */
+        {TRUE, sizeof(struct mfs_mntargs), sizeof(struct mfs_mntargs)},
+        /* MVFS_CMD_UNMOUNT 37 */
+        {TRUE, sizeof(mvfs_unmount_info_t), sizeof(mvfs_unmount_info_t)},
+        /* MVFS_CMD_RMALLVIEWTAGS 38 */
+        {TRUE, 0, 0},
+        /* MVFS_CMD_UMOUNTALL 39 */
+        {TRUE, 0, 0},
+        /* MVFS_CMD_GET_POOLMAPS 40 */
+        {TRUE, sizeof(mvfs_ioget_poolmaps_t), sizeof(mvfs_ioget_poolmaps_t)},
+        /* MVFS_CMD_VDM 41 */
+        {FALSE,0,0},
+        /* MVFS_CMD_ABORT 42 */
+        {TRUE, 0, 0},
+        /* MVFS_CMD_EXPORTVIEWTAG 43 */
+        {TRUE, sizeof(mvfs_export_viewinfo_t), sizeof(mvfs_export_viewinfo_t)},
+        /* MVFS_CMD_UNEXPORTVIEWTAG 44 */
+        {TRUE, sizeof(mvfs_viewtag_info_t), sizeof(mvfs_viewtag_info_t)},
+        /* MVFS_CMD_ZERO_STATS 45 */
+        {TRUE, 0, 0},
+        /* MVFS_CMD_GET_CACHE_USAGE 46 */
+        {TRUE, sizeof(mvfs_cache_usage_t), sizeof(mvfs_cache_usage_t)},
+        /* MVFS_CMD_SET_CACHE_SIZES 47 */
+        {TRUE, sizeof(mvfs_cache_sizes_t), sizeof(mvfs_cache_sizes_t)},
+        /* MVFS_CMD_AUDIT_MARKER 48 */
+        {TRUE, sizeof(u_long), sizeof(u_long)},
+        /* MVFS_CMD_IOD_NULL 49 */
+        {FALSE, 0, 0},
+        /* MVFS_CMD_GET_VIEW_STATS 50 */
+        {TRUE, sizeof(mvfs_viewstats_t), sizeof(mvfs_viewstats_t)},
+        /* MVFS_CMD_ZERO_VIEW_STATS 51 */
+        {TRUE, sizeof(mvfs_zero_viewstat_t), sizeof(mvfs_zero_viewstat_t)},
+        /* MVFS_CMD_SIDHOST_CREDMAPPING 52 */
+        {TRUE, sizeof(mvfs_sidhost_cred_t), sizeof(mvfs_sidhost_cred_t)},
+        /* MVFS_CMD_DELETE_SIDHOST_CREDMAPPING 53 */
+        {TRUE, sizeof(mvfs_sid_t), sizeof(mvfs_sid_t)},
+        /* MVFS_CMD_GET_VIEWTAG_EXPORT 54 */
+        {TRUE, sizeof(mvfs_export_viewinfo_t), sizeof(mvfs_export_viewinfo_t)},
+        /* MVFS_CMD_GET_GFSINFO 55 */
+        {TRUE, sizeof(mvfs_gfsinfo_t), sizeof(mvfs_gfsinfo_t)},
+        /* MVFS_CMD_SET_VOBRT_VFSMNT 56 */
+        {TRUE, sizeof(mfs_strbufpn_pair_t), sizeof(mfs_strbufpn_pair_t)},
+        /* MVFS_CMD_GET_CACHE_SIZES 57 */
+        {TRUE, sizeof(mvfs_cache_sizes_t), sizeof(mvfs_cache_sizes_t)},
         /* MVFS_CMD_REG_GRPLIST_ORDER 58 */
         {FALSE, 0, 0},
         /* MVFS_CMD_UNREG_GRPLIST_ORDER 59 */
         {FALSE, 0, 0},
-	/* MVFS_CMD_COMPUTE_CACHE_DEFAULTS 60 */
-	{TRUE, sizeof(mvfs_cache_sizes_t), sizeof(mvfs_cache_sizes_t)},
+        /* MVFS_CMD_COMPUTE_CACHE_DEFAULTS 60 */
+        {TRUE, sizeof(mvfs_cache_sizes_t), sizeof(mvfs_cache_sizes_t)},
         /* MVFS_CMD_GRPLIST_READ 61 */
         {FALSE, 0, 0},
         /* MVFS_CMD_MKVIEWTAG_EX 62 */
         {FALSE, 0, 0},
+
+        /* MVFS_CMD_ENABLE_PVIEW_STATS 63 */
+        {TRUE, 0, 0},
+
+        /* MVFS_CMD_DISABLE_PVIEW_STATS 64 */
+        {TRUE, 0, 0},
 
 /* If you add items here, add them as well to the 32/64 bit conversion
    table in mvfs_transtype.c */
@@ -2106,24 +2111,24 @@ mvfscmd_block_t *mcbp;
 {
     /* valid MVFS_CMD ? */
     if (mcbp->hdr.cmd < MVFS_CMD_MIN)
-	return (EINVAL);
+        return (EINVAL);
 
     if (mcbp->hdr.cmd > MVFS_CMD_MAX)
-	return (EINVAL);
+        return (EINVAL);
 
     /* Used ? */
     if (mvfs_ioctl_valid_table[mcbp->hdr.cmd - 1].used != TRUE)
-	return(EINVAL);
+        return(EINVAL);
 
     /* Do we need to check length ? */
     if (mvfs_ioctl_valid_table[mcbp->hdr.cmd - 1].mininfolen == -1L)
-	return (0);
+        return (0);
 
     if (mcbp->infolen < mvfs_ioctl_valid_table[mcbp->hdr.cmd - 1].mininfolen)
-	return (EINVAL);
+        return (EINVAL);
 
     if (mcbp->infolen > mvfs_ioctl_valid_table[mcbp->hdr.cmd - 1].maxinfolen)
-	return (EINVAL);
+        return (EINVAL);
 
     return (0);
 }
@@ -2162,53 +2167,52 @@ mvfs_ioctlv_subr(
 
     ASSERT(VTOM(vp)->mn_hdr.vp);
     switch (VTOM(vp)->mn_hdr.mclass) {
-	case MFS_LOOPCLAS:	/* Pass on to real vnode */
-	case MFS_VIEWCLAS:
-	    error = MVOP_IOCTL(MFS_REALVP(vp), com, data, flag, cd, 
+        case MFS_LOOPCLAS:	/* Pass on to real vnode */
+        case MFS_VIEWCLAS:
+            error = MVOP_IOCTL(MFS_REALVP(vp), com, data, flag, cd, 
                                rvalp, vopbdp, callinfo);
-	    break;
-	case MFS_NTVWCLAS:
-	case MFS_VIEWDIRCLAS:
-	    error = EINVAL;
-	    break;
-	case MFS_SDEVCLAS:	/* Special ops here */
-	    if (MVFS_IS_IT_OUR_IOCTL(com, callinfo) == 0) {
-		error = ENOTTY;
-		break;
-	    }
+            break;
+        case MFS_NTVWCLAS:
+        case MFS_VIEWDIRCLAS:
+            error = EINVAL;
+            break;
+        case MFS_SDEVCLAS:	/* Special ops here */
+            if (MVFS_IS_IT_OUR_IOCTL(com, callinfo) == 0) {
+                error = ENOTTY;
+                break;
+            }
 
-	    /* Validate passed in length as not too long. */
+            /* Validate passed in length as not too long. */
 
             if (((com >> 16) & _IOCPARM_MASK) > MVFS_IOCTL_MAXLEN) {
-		MVFS_EXIT_FS(mth);
-		return (EINVAL);
-	    }
-
-	    /* 
+                MVFS_EXIT_FS(mth);
+                return (EINVAL);
+            }
+            /* 
              * Allocate block for copyin of data and call copyin routine with it 
-	     * For future compatibility (where we may ADD fields and check the length
-	     * to tell old apps from new apps with new ioctl cmd), I allocate the
-	     * max length buffer we support, not the "current" size of an
-  	     * mvfscmd block.
+             * For future compatibility (where we may ADD fields and check the length
+             * to tell old apps from new apps with new ioctl cmd), I allocate the
+             * max length buffer we support, not the "current" size of an
+             * mvfscmd block.
              */
 
-	    iocbuf = (mvfscmd_block_t *)KMEM_ALLOC(sizeof(mvfscmd_block_t), KM_SLEEP);
+            iocbuf = (mvfscmd_block_t *)KMEM_ALLOC(sizeof(mvfscmd_block_t), KM_SLEEP);
             if (iocbuf == NULL) {
                 error = ENOMEM;
                 break;
             }
-	    error = mvfs_ioctl_copyin((mvfscmd_block_t *)data, iocbuf,
-	                               &infop, callinfo);
-	    if (error) {
-		KMEM_FREE(iocbuf, sizeof(mvfscmd_block_t));
-	        break; /* nothing we can do */
-	    }
+            error = mvfs_ioctl_copyin((mvfscmd_block_t *)data, iocbuf,
+                                       &infop, callinfo);
+            if (error) {
+                KMEM_FREE(iocbuf, sizeof(mvfscmd_block_t));
+                break; /* nothing we can do */
+            }
 
-	    error = MVFS_VALIDATE_IOCTL(iocbuf, callinfo);
-	    if (error) {
-		KMEM_FREE(iocbuf, sizeof(mvfscmd_block_t));
-	        break; /* nothing we can do */
-	    }
+            error = MVFS_VALIDATE_IOCTL(iocbuf, callinfo);
+            if (error) {
+                KMEM_FREE(iocbuf, sizeof(mvfscmd_block_t));
+                break; /* nothing we can do */
+            }
 
             /* Lookup ignores commands w/out pnames
              * On error, mvfs_ioctl_lookup returns -1 and sets the 
@@ -2218,55 +2222,55 @@ mvfs_ioctlv_subr(
              */
             error = mvfs_ioctl_lookup(iocbuf, &xvp, &cvp, cd, callinfo);
 
-	    if (!error) {
-		error = mvfs_mioctl(xvp, cvp, iocbuf, flag, cd, callinfo);
+            if (!error) {
+                error = mvfs_mioctl(xvp, cvp, iocbuf, flag, cd, callinfo);
                 ourcmd = MCB_CMD(iocbuf);
                 ourerr = iocbuf->status;
                 if (cvp)
-                    CVN_RELE(cvp);
+                    CVN_RELE(cvp, cd);
                 if (xvp)
-                    VN_RELE(xvp);
-	    }
+                    ATRIA_VN_RELE(xvp, cd);
+            }
 
-	    error = mvfs_ioctl_copyout((mvfscmd_block_t *)data, iocbuf, 
-	                                infop, callinfo);
-	    if (iocbuf) {
-		KMEM_FREE(iocbuf, sizeof(mvfscmd_block_t));
-	    }
-	    break;
-	case MFS_VOBRTCLAS:
-	    vp = mfs_bindroot(vp, cd, &error);
-	    if (error == ESRCH) error = EINVAL;  /* Null view - no ioctl */
-	    if (error) break;
-	    /* Fall through */
-	case MFS_VOBCLAS: {
+            error = mvfs_ioctl_copyout((mvfscmd_block_t *)data, iocbuf, 
+                                        infop, callinfo);
+            if (iocbuf) {
+                KMEM_FREE(iocbuf, sizeof(mvfscmd_block_t));
+            }
+            break;
+        case MFS_VOBRTCLAS:
+            vp = mfs_bindroot(vp, cd, &error);
+            if (error == ESRCH) error = EINVAL;  /* Null view - no ioctl */
+            if (error) break;
+            /* Fall through */
+        case MFS_VOBCLAS: {
 
-	    /* Pass through the ioctl to the cleartext */
+            /* Pass through the ioctl to the cleartext */
 
-	    error = 0;
-	    if (MVFS_ISVTYPE(vp, VREG)) {
-	        MLOCK(VTOM(vp));
-		error =  mfs_getcleartext(vp, &cvp, cd);
-		MUNLOCK(VTOM(vp));
-		if (!error) {
+            error = 0;
+            if (MVFS_ISVTYPE(vp, VREG)) {
+                MLOCK(VTOM(vp));
+                error =  mfs_getcleartext(vp, &cvp, cd);
+                MUNLOCK(VTOM(vp));
+                if (!error) {
                     error = MVOP_IOCTL(MVFS_CVP_TO_VP(cvp), com, data, flag,
                                        cd, rvalp, vopbdp, callinfo);
-		    CVN_RELE(cvp);
-		} else {
-		    if (error == EISDIR) error = ENOTTY;
-		}
-	    } else {
-	        /* Not a file - give unsupported ioctl */
-		error = ENOTTY;
-	    }
-	    break;
-	}
-	default:
-	    error = ENXIO;
-	    break;
+                    CVN_RELE(cvp, cd);
+                } else {
+                    if (error == EISDIR) error = ENOTTY;
+                }
+            } else {
+                /* Not a file - give unsupported ioctl */
+                error = ENOTTY;
+            }
+            break;
+        }
+        default:
+            error = ENXIO;
+            break;
     }
-
-    if (vp && vp != avp) VN_RELE(vp);   /* Release if allocated a vnode */
+    if (vp && vp != avp)
+        ATRIA_VN_RELE(vp, cd);   /* Release if allocated a vnode */
 
     MDB_VLOG((MFS_VIOCTL,"vp=%"KS_FMT_PTR_T" com=%x(%d), data=%"KS_FMT_PTR_T", err=%d(%d)\n",vp,com,ourcmd,data,error,ourerr));
     BUMPSTAT(mfs_vnopcnt[MFS_VIOCTL]);
@@ -2320,24 +2324,24 @@ mfs_ac_timedout(
      *     in mvfs_set_ac_timeout).
      */
     if (MVFS_MYTHREAD(cd)->thr_attrgen > mnp->mn_vob.attrgen) {
-	if (evmiss_flag) {
-	    BUMPSTAT(mfs_acstat.ac_evmiss);
-	} else {
-	    BUMPSTAT(mfs_acstat.ac_genmiss);
-	    BUMPVSTATM(mnp,acstat.ac_genmiss);
-	}
-	return 1;
+        if (evmiss_flag) {
+            BUMPSTAT(mfs_acstat.ac_evmiss);
+        } else {
+            BUMPSTAT(mfs_acstat.ac_genmiss);
+            BUMP_VACSTATM(mnp,acstat.ac_genmiss);
+        }
+        return 1;
     }
 
     if (MVFS_ISVTYPE(vp, VDIR) &&
         mnp->mn_vob.attrsettime.tv_sec <= mmi->mmi_ac_dir_ftime)
     {
-	if (evmiss_flag) {
-	    BUMPSTAT(mfs_acstat.ac_evmiss);
-	} else {
-	    BUMPSTAT(mfs_acstat.ac_timo);
-	    BUMPVSTATM(mnp, acstat.ac_timo);
-	}
+        if (evmiss_flag) {
+            BUMPSTAT(mfs_acstat.ac_evmiss);
+        } else {
+            BUMPSTAT(mfs_acstat.ac_timo);
+            BUMP_VACSTATM(mnp, acstat.ac_timo);
+        }
         return 1;
     }
 
@@ -2347,67 +2351,67 @@ mfs_ac_timedout(
        Thus, no worries about COWable files not getting noticed here because
        of LVUT. */
     if (curtime > mnp->mn_vob.attrtime.tv_sec) {
-	if (!VIEW_ISA_VIEW_OBJ(&mnp->mn_vob.vfh) &&
-	    !MFS_HMVFH(&mnp->mn_vob.vfh) &&
-	    mnp->mn_vob.attr.fstat.type != TBS_FTYPE_DIR &&
-	    mnp->mn_hdr.viewvp != NULL) {
-	    /*
-	     * Check whether the last VOB update time indicates that
-	     * some other RPC request to the view for this VOB
-	     * discovered that nothing significant has changed that
-	     * could affect a VOB object (The other call that might
-	     * have done that in essence performed a bulk revalidation
-	     * on the name cache).
-	     *
-	     * If the view said this thing was up to date, then reset
-	     * the attr time to look like we just refetched this data.
-	     *
-	     * basic conditions for trusting the attributes and sliding the
-	     * timeout:
-	     *
-	     * the LVUT is not stale [checked inside find_vobstamp()]
-	     * -and-
-	     * object is a VOB-resident thing
-	     * -and-
-	     * attribute lvut == current lvut
-	     */
-	    struct timeval vs;
-	    time_t valid_thru;
-	    if (mvfs_viewdir_find_vobstamp(mnp->mn_hdr.viewvp,
-					   &VFS_TO_MMI(mnp->mn_hdr.vfsp)->mmi_svr.uuid,
-					   &vs, &valid_thru)) {
-		MLOCK(mnp);
-		if (MFS_TVEQ(mnp->mn_vob.lvut, vs)) {
-		    /*
-		     * OK, we can slide the vob attribute time now, but
-		     * make sure it doesn't extend beyond the LVUT's valid
-		     * lifetime.
-		     */
-		    mvfs_set_ac_timeout(mnp, mnp->mn_hdr.vfsp,
-					valid_thru, FALSE, FALSE);
-		    MUNLOCK(mnp);
-		    BUMPSTAT(mfs_acstat.ac_lvuthit);
-		    BUMPVSTATM(mnp,acstat.ac_lvuthit);
-		    return 0;
-		} else {
-		    MUNLOCK(mnp);
-		    MDB_XLOG((MDB_LVUT,
-			      "lvutmiss: vw=%"KS_FMT_PTR_T", vfsp=%"KS_FMT_PTR_T", lvut=%"KS_FMT_TV_SEC_T_D".%"KS_FMT_TV_USEC_T_D", timeout=%"KS_FMT_TIME_T_D"\n",
-			      mnp->mn_hdr.viewvp, mnp->mn_hdr.vfsp,
-			      vs.tv_sec, vs.tv_usec,
-			      valid_thru));
-		    BUMPSTAT(mfs_acstat.ac_lvutmiss);
-		    BUMPVSTATM(mnp,acstat.ac_lvutmiss);
-		}
-	    }
-	}
-	if (evmiss_flag) {
-	    BUMPSTAT(mfs_acstat.ac_evmiss);
-	} else {
-	    BUMPSTAT(mfs_acstat.ac_timo);
-	    BUMPVSTATM(mnp,acstat.ac_timo);
-	}
-	return 1;
+        if (!VIEW_ISA_VIEW_OBJ(&mnp->mn_vob.vfh) &&
+            !MFS_HMVFH(&mnp->mn_vob.vfh) &&
+            mnp->mn_vob.attr.fstat.type != TBS_FTYPE_DIR &&
+            mnp->mn_hdr.viewvp != NULL) {
+            /*
+             * Check whether the last VOB update time indicates that
+             * some other RPC request to the view for this VOB
+             * discovered that nothing significant has changed that
+             * could affect a VOB object (The other call that might
+             * have done that in essence performed a bulk revalidation
+             * on the name cache).
+             *
+             * If the view said this thing was up to date, then reset
+             * the attr time to look like we just refetched this data.
+             *
+             * basic conditions for trusting the attributes and sliding the
+             * timeout:
+             *
+             * the LVUT is not stale [checked inside find_vobstamp()]
+             * -and-
+             * object is a VOB-resident thing
+             * -and-
+             * attribute lvut == current lvut
+             */
+            struct timeval vs;
+            time_t valid_thru;
+            if (mvfs_viewdir_find_vobstamp(mnp->mn_hdr.viewvp,
+                                           &VFS_TO_MMI(mnp->mn_hdr.vfsp)->mmi_svr.uuid,
+                                           &vs, &valid_thru)) {
+                MLOCK(mnp);
+                if (MFS_TVEQ(mnp->mn_vob.lvut, vs)) {
+                    /*
+                     * OK, we can slide the vob attribute time now, but
+                     * make sure it doesn't extend beyond the LVUT's valid
+                     * lifetime.
+                     */
+                    mvfs_set_ac_timeout(mnp, mnp->mn_hdr.vfsp,
+                                        valid_thru, FALSE, FALSE);
+                    MUNLOCK(mnp);
+                    BUMPSTAT(mfs_acstat.ac_lvuthit);
+                    BUMP_VACSTATM(mnp,acstat.ac_lvuthit);
+                    return 0;
+                } else {
+                    MUNLOCK(mnp);
+                    MDB_XLOG((MDB_LVUT,
+                              "lvutmiss: vw=%"KS_FMT_PTR_T", vfsp=%"KS_FMT_PTR_T", lvut=%"KS_FMT_TV_SEC_T_D".%"KS_FMT_TV_USEC_T_D", timeout=%"KS_FMT_TIME_T_D"\n",
+                              mnp->mn_hdr.viewvp, mnp->mn_hdr.vfsp,
+                              vs.tv_sec, vs.tv_usec,
+                              valid_thru));
+                    BUMPSTAT(mfs_acstat.ac_lvutmiss);
+                    BUMP_VACSTATM(mnp,acstat.ac_lvutmiss);
+                }
+            }
+        }
+        if (evmiss_flag) {
+            BUMPSTAT(mfs_acstat.ac_evmiss);
+        } else {
+            BUMPSTAT(mfs_acstat.ac_timo);
+            BUMP_VACSTATM(mnp,acstat.ac_timo);
+        }
+        return 1;
     }
     return 0;
 }
@@ -2441,18 +2445,18 @@ int goodlvut;
     /* Clamp to min/max based on dir or not. */
 
     if (mnp->mn_vob.attr.fstat.type == TBS_FTYPE_DIR) {
-	if (delta < mmi->mmi_ac_dirmin) {
-	    delta = mmi->mmi_ac_dirmin;
+        if (delta < mmi->mmi_ac_dirmin) {
+            delta = mmi->mmi_ac_dirmin;
         } else if (delta > mmi->mmi_ac_dirmax) {
-	    delta = mmi->mmi_ac_dirmax;
-	}
+            delta = mmi->mmi_ac_dirmax;
+        }
     } else {
-	if (delta < mmi->mmi_ac_regmin) {
-	    delta = mmi->mmi_ac_regmin;
+        if (delta < mmi->mmi_ac_regmin) {
+            delta = mmi->mmi_ac_regmin;
         } else if (delta > mmi->mmi_ac_regmax) {
-	    delta = mmi->mmi_ac_regmax;
-	}
-	
+            delta = mmi->mmi_ac_regmax;
+        }
+        
     }
 
     /* 
@@ -2464,9 +2468,9 @@ int goodlvut;
 
 
     if (nlt != 0)
-	mnp->mn_vob.attrtime.tv_sec = KS_MIN(ctime + delta, nlt);
+        mnp->mn_vob.attrtime.tv_sec = KS_MIN(ctime + delta, nlt);
     else
-	mnp->mn_vob.attrtime.tv_sec = ctime + delta;
+        mnp->mn_vob.attrtime.tv_sec = ctime + delta;
     mnp->mn_vob.attrtime.tv_nsec = 0;
 
    /*
@@ -2495,7 +2499,7 @@ int goodlvut;
     */
 
     if (bumpgen)
-	mnp->mn_vob.attrgen = MFS_MNATTRGEN(mndp);
+        mnp->mn_vob.attrgen = MFS_MNATTRGEN(mndp);
     if (goodlvut) {
         /* save the freshly-fetched LVUT, and let it be valid for as long
          * as the maximum normal file attribute timeout.
@@ -2506,10 +2510,10 @@ int goodlvut;
          * a new LVUT once each ac_regmax interval, we will notice
          * any changes once a new LVUT is returned; this is an acceptable delay
          */
-	mvfs_viewdir_save_vobstamp(mnp->mn_hdr.viewvp,
-				   &mmi->mmi_svr.uuid,
-				   ctime + mmi->mmi_ac_regmax,
-				   &mnp->mn_vob.lvut);
+        mvfs_viewdir_save_vobstamp(mnp->mn_hdr.viewvp,
+                                   &mmi->mmi_svr.uuid,
+                                   ctime + mmi->mmi_ac_regmax,
+                                   &mnp->mn_vob.lvut);
     }
 }
 
@@ -2538,7 +2542,7 @@ mvfs_ac_set_stat(
     ASSERT(MFS_ISVOB(mnp));
 
     BUMPSTAT(mfs_acstat.ac_updates);
-    BUMPVSTATM(mnp,acstat.ac_updates);
+    BUMP_VACSTATM(mnp, acstat.ac_updates);
 
     /* 
      * Check if dir or file is modified. 
@@ -2552,13 +2556,13 @@ mvfs_ac_set_stat(
     if (!MVFS_TIMEVAL_EQUAL(&(mnp->mn_vob.attr.fstat.mtime),
                             &(vstatp->fstat.mtime)))
     {
-	flags |= MFS_DTMMOD;
+        flags |= MFS_DTMMOD;
     }
     /* Compare vob modified times for changes in VOB (not view) */
     if (!MVFS_TIMEVAL_EQUAL(&(mnp->mn_vob.attr.event_time),
                             &(vstatp->event_time)))
     {
-	flags |= MFS_VOBMOD;
+        flags |= MFS_VOBMOD;
     }
     /* Compare object oids (detect COW which requires a cleartext
        dump/reload) */
@@ -2578,7 +2582,7 @@ mvfs_ac_set_stat(
         !MFS_OIDNULL(mnp->mn_vob.attr.obj_oid) &&
         !MFS_OIDEQ(vstatp->obj_oid, mnp->mn_vob.attr.obj_oid))
     {
-	flags |= MFS_DOMOD;
+        flags |= MFS_DOMOD;
 #ifdef MVFS_DEBUG
         mvfs_log(MFS_LOG_DEBUG, "oidchg mtype %d to %d\n",
                  mnp->mn_vob.attr.mtype, vstatp->mtype);
@@ -2610,7 +2614,7 @@ void
 mfs_ac_modevents(
     register VNODE_T *vp,
     int flags,
-    CRED_T *cred
+    CALL_DATA_T *cd
 )
 {
     register mfs_mnode_t *mnp;
@@ -2636,29 +2640,29 @@ mfs_ac_modevents(
      */
 
     if (modified || vobmod || domod) {
-	if (modified) {
-	    BUMPSTAT(mfs_acstat.ac_mod);
-	    BUMPVSTAT(vp,acstat.ac_mod);
-	} else {
-	    BUMPSTAT(mfs_acstat.ac_vobmod);
-	    BUMPVSTAT(vp,acstat.ac_vobmod);
-	}
-	
-	switch (MVFS_GETVTYPE(vp)) {
-	    case VREG:
-		if (vobmod) {
+        if (modified) {
+            BUMPSTAT(mfs_acstat.ac_mod);
+            BUMP_VACSTAT(vp,acstat.ac_mod);
+        } else {
+            BUMPSTAT(mfs_acstat.ac_vobmod);
+            BUMP_VACSTAT(vp,acstat.ac_vobmod);
+        }
+        
+        switch (MVFS_GETVTYPE(vp)) {
+            case VREG:
+                if (vobmod) {
 
-		    /* 
-		     * On a VOB modified event, set a flag to flush
-		     * the cleartext binding on the next inactive.
-		     * The cleartext may have moved, but we can't just purge 
-		     * it here, because there may be activities
-		     * in progress (mapped files, open files) that require
-		     * the cleartext vnode ptr to remain active.
-		     */
-		    mfs_dnc_invalvp(vp);          /* Invalidate name cache */
-		    mfs_clear_mark_name_purge(vp);
-		}
+                    /* 
+                     * On a VOB modified event, set a flag to flush
+                     * the cleartext binding on the next inactive.
+                     * The cleartext may have moved, but we can't just purge 
+                     * it here, because there may be activities
+                     * in progress (mapped files, open files) that require
+                     * the cleartext vnode ptr to remain active.
+                     */
+                    mfs_dnc_invalvp(vp);          /* Invalidate name cache */
+                    mfs_clear_mark_name_purge(vp);
+                }
                 if (domod && MFS_CLRTEXT_RO(mnp)) {
                     /* MFS_CLRTEXT_RO() check because we only need to
                        dump it if we or some other client might have
@@ -2669,52 +2673,52 @@ mfs_ac_modevents(
                     if (mnp->mn_vob.open_count == 0) {
                         MDB_XLOG((MDB_CLEAROPS,
                                   "domod: vp=%"KS_FMT_PTR_T" VOB DO released\n", vp));
-                        mfs_clear_rele(vp, cred);
+                        mfs_clear_rele(vp, cd);
                     } else {
                         MDB_XLOG((MDB_CLEAROPS,
                                   "domod: vp=%"KS_FMT_PTR_T" VOB DO name purge\n", vp));
                     }
                 }
-		break;
-	    case VDIR:
-	        mnp->mn_vob.dir_eof = 0;   /* Don't know end of dir anymore */
-		/*
-		 * If a VOB event, then dir might be an "out of date"
+                break;
+            case VDIR:
+                mnp->mn_vob.dir_eof = 0;   /* Don't know end of dir anymore */
+                /*
+                 * If a VOB event, then dir might be an "out of date"
                  * cdir.  Set bit to indicate this.  This can only
                  * be cleared by a successful verify that this is correct
                  * version for this object in this view.  Also note,
                  * that history mode vnodes can NEVER be out of date.
                  */
-		if (vobmod && !VTOM(mnp->mn_hdr.viewvp)->mn_view.hm) {
-		    MFS_REBINDINVAL(mnp);
-		}
-	        /* 
-	         * If unexpected 3'rd party modification - purge dir cache.
-	         * If the caller passed in the "expected mod" flag, then
+                if (vobmod && !VTOM(mnp->mn_hdr.viewvp)->mn_view.hm) {
+                    MFS_REBINDINVAL(mnp);
+                }
+                /* 
+                 * If unexpected 3'rd party modification - purge dir cache.
+                 * If the caller passed in the "expected mod" flag, then
                  * the caller is responsible for fixing the name cache 
                  * correctly for what he did.
                  */
-	        if (!expmod || vobmod) {
-		    mfs_dnc_invalvp(vp);
+                if (!expmod || vobmod) {
+                    mfs_dnc_invalvp(vp);
 
-		    mfs_index_cache_flush(vp);
-		} else {
-		    BUMPSTAT(mfs_acstat.ac_expmod);
-		    BUMPVSTAT(vp,acstat.ac_expmod);
-		}
+                    mfs_index_cache_flush(vp);
+                } else {
+                    BUMPSTAT(mfs_acstat.ac_expmod);
+                    BUMP_VACSTAT(vp,acstat.ac_expmod);
+                }
                 /* flush rddir cache, too hard to clean it up */
                 mvfs_rddir_cache_flush(VTOM(vp));
 
-		break;
-	    default:
-	        /* If any cached data (symlink) - assume not valid now */
-	        if (mnp->mn_vob.slinktext) {
-	    	    KMEM_FREE(mnp->mn_vob.slinktext, mnp->mn_vob.slinklen);
-	    	    mnp->mn_vob.slinktext = NULL;
-	    	    mnp->mn_vob.slinklen = 0;
-		}
-		break;
-	}  /* end of switch(MVFS_GETVTYPE(vp)) */
+                break;
+            default:
+                /* If any cached data (symlink) - assume not valid now */
+                if (mnp->mn_vob.slinktext) {
+                    KMEM_FREE(mnp->mn_vob.slinktext, mnp->mn_vob.slinklen);
+                    mnp->mn_vob.slinktext = NULL;
+                    mnp->mn_vob.slinklen = 0;
+                }
+                break;
+        }  /* end of switch(MVFS_GETVTYPE(vp)) */
     }	   /* end of modified or vob modified */
 }
 
@@ -2727,7 +2731,8 @@ mvfs_attrcache(
     VFS_T *vfsp,
     view_vstat_t *vstatp,
     int expmod,     /* Indicates caller expects this modification */
-    CRED_T *cred
+    CALL_DATA_T *cd,
+    int update_attrs
 )
 {
     VNODE_T *vp;
@@ -2737,16 +2742,16 @@ mvfs_attrcache(
     ASSERT(MFS_ISVOB(mnp));
 
     /* First stuff the stats */
-    modflags = mvfs_ac_set_stat(mnp, vfsp, vstatp, FALSE, cred);
+    modflags = mvfs_ac_set_stat(mnp, vfsp, vstatp, FALSE, MVFS_CD2CRED(cd));
 
     /* If we have a vnode we can manage other cached info. */
     if ((vp = MTOV(mnp)) != NULL) {
-        /* Sync attributes with wrapper (if any) */
-        MVFS_WRAP_UPDATE_ATTRS(vp);
+        if (update_attrs)  /* Sync attributes with wrapper (if any) */
+        	MVFS_WRAP_UPDATE_ATTRS(vp,cd);
 
         /* Process any modified events */
         if (expmod) modflags |= MFS_EXPMOD;
-        mfs_ac_modevents(vp, modflags, cred);
+        mfs_ac_modevents(vp, modflags, cd);
     }
 }
 
@@ -2766,7 +2771,7 @@ mfs_evtime_valid(
 
     ASSERT(VTOM(vp)->mn_hdr.vp);
     vobmod = (tvp->tv_sec != VTOM(vp)->mn_vob.attr.event_time.tv_sec) ||
-	   	(tvp->tv_usec != VTOM(vp)->mn_vob.attr.event_time.tv_usec);
+                (tvp->tv_usec != VTOM(vp)->mn_vob.attr.event_time.tv_usec);
 
     /*
      * Only do getattr if we don't think the VOB node changed--the caller
@@ -2775,15 +2780,15 @@ mfs_evtime_valid(
      * still not match after the getattr)  (XXX?)
      */
     if ((vobmod == 0) && mfs_ac_timedout(VTOM(vp), TRUE, cd)) {
-	BUMPVSTAT(vp,acstat.ac_evmiss);
-	error = mfs_clnt_getattr(vp, cd);
-	BUMPSTAT(mfs_acstat.ac_misses);
-	BUMPVSTAT(vp,acstat.ac_misses);
+        BUMP_VACSTAT(vp,acstat.ac_evmiss);
+        error = mfs_clnt_getattr(vp, cd);
+        BUMPSTAT(mfs_acstat.ac_misses);
+        BUMP_VACSTAT(vp,acstat.ac_misses);
         if (error) return(0);	/* Not valid if any errors! */
 
-	/* if we refetched stats, re-check vobmod */
-	vobmod = (tvp->tv_sec != VTOM(vp)->mn_vob.attr.event_time.tv_sec) ||
-		 (tvp->tv_usec != VTOM(vp)->mn_vob.attr.event_time.tv_usec);
+        /* if we refetched stats, re-check vobmod */
+        vobmod = (tvp->tv_sec != VTOM(vp)->mn_vob.attr.event_time.tv_sec) ||
+                 (tvp->tv_usec != VTOM(vp)->mn_vob.attr.event_time.tv_usec);
     }
 
     return((vobmod == 0));
@@ -2853,7 +2858,6 @@ mfs_getattr(
     MVFS_DECLARE_THREAD(mth)
     
     MVFS_ENTER_FS(mth);
-
     ASSERT(mnp->mn_hdr.vp);
     switch (mnp->mn_hdr.mclass) {
       case MFS_SDEVCLAS:
@@ -2884,8 +2888,7 @@ mfs_getattr(
 
       case MFS_VIEWCLAS: 
         MFS_CHKSP(STK_GETATTR);
-        error = MVOP_GETATTR(MFS_REALVP(vp), MFS_CLRVP(vp), vap, flag,
-                             MVFS_CD2CRED(cd));
+        error = MVOP_GETATTR(MFS_REALVP(vp), MFS_CLRVP(vp), vap, flag, cd);
         /* 
          * Special hack to fix problems with programs that require
          * "/" to be a real device on the system, not a funky MFS
@@ -2898,7 +2901,7 @@ mfs_getattr(
          * of "/view" differ from one view to the next (your current
          * view will stat as a non-MFS device).
          */
-	 rdir = MDKI_GET_U_RDIR();
+         rdir = MDKI_GET_U_RDIR();
         /*
          * rdir may be NULL if there is no chroot in effect (no
          * setview), or on Linux due to resource shortages.
@@ -2934,8 +2937,7 @@ mfs_getattr(
         break;
       case MFS_LOOPCLAS:	/* Pass on to real vnode */
         MFS_CHKSP(STK_GETATTR);
-	error = MVOP_GETATTR(MFS_REALVP(vp), MFS_CLRVP(vp), vap, flag,
-                    MVFS_CD2CRED(cd));
+        error = MVOP_GETATTR(MFS_REALVP(vp), MFS_CLRVP(vp), vap, flag, cd);
         break;
       case MFS_VIEWDIRCLAS:
         error = mfs_viewdirgetattr(vp, vap, MVFS_CD2CRED(cd));
@@ -2946,9 +2948,9 @@ mfs_getattr(
             MLOCK(mnp); /* Guard against update in progress */
             munlock = 1; /* unlock when done */
         }
-	error = mvfs_ntvw_getattr(vp, vap, MVFS_CD2CRED(cd));
+        error = mvfs_ntvw_getattr(vp, vap, MVFS_CD2CRED(cd));
         if (munlock) MUNLOCK(mnp);
-	break;
+        break;
       case MFS_VOBRTCLAS:
         if ((flag & MVFS_GETATTR_NO_BINDROOT) != 0)
             error = ESRCH;
@@ -2960,16 +2962,16 @@ mfs_getattr(
                 mvfs_noview_vobrt_getattr(vp, vap);
              }
              break;
-	}
+        }
         /* Fall through */
       case MFS_VOBCLAS:
 
         (void) mfs_rebind_vpp((vp != avp), &vp, cd);
 
         mnp = VTOM(vp);
-	MLOCK(mnp);
+        MLOCK(mnp);
 
-	/* 
+        /* 
          * Get latest cleartext attrs if a view object.  Don't bother doing this
 	 * for 'immutable' objects in a VOB.  In that case, we got the stats at
 	 * getcleartext time (if the cleartext is active), and they shouldn't
@@ -2977,10 +2979,9 @@ mfs_getattr(
 	 * cleartext pool (about 90% of the traffic we generate to the cleartext
 	 * pool).  The passed in vap is only used for its mask.  The attr values
 	 * are filled in below from the view/vob object.
-         */
-
-	if (mnp->mn_hdr.realvp && !mnp->mn_vob.cleartext.isvob) {
-            error = mvfs_clearattr(vp, vap, MVFS_CD2CRED(cd));
+	 */
+	 if (mnp->mn_hdr.realvp && !mnp->mn_vob.cleartext.isvob) {
+	     error = mvfs_clearattr(vp, vap,cd); 
             /* Mark cleartext for purge on ANY error */
             if (error) {
                 mfs_clear_mark_purge(vp);
@@ -3029,7 +3030,7 @@ mfs_getattr(
                 VATTR_FILL(vap);
             }
             BUMPSTAT(mfs_acstat.ac_hits);
-            BUMPVSTAT(vp,acstat.ac_hits);
+            BUMP_VACSTAT(vp, acstat.ac_hits);
             fromcache = 1;
         } else {
             error = mfs_clnt_getattr(vp, cd);
@@ -3040,7 +3041,7 @@ mfs_getattr(
                 VATTR_FILL(vap);
             }
             BUMPSTAT(mfs_acstat.ac_misses);
-            BUMPVSTAT(vp,acstat.ac_misses);
+            BUMP_VACSTAT(vp, acstat.ac_misses);
         }
 
         /* 
@@ -3090,29 +3091,31 @@ mfs_getattr(
 	}
 	rdir = NULL;
 	break;
+	       
       default:
         error = ENXIO;
         break;
-    }
+ 	}
     if (error == 0) {
         MVFS_MDEP_GETATTR_CLEANUP(avp, vp, vap, flag, MVFS_CD2CRED(cd));
     }
 
-    if (vp != avp) VN_RELE(vp);   /* Release if allocated bound root vnode */
+    if (vp != avp)
+        ATRIA_VN_RELE(vp, cd);  /* Release if allocated bound root vnode */
 
 #ifdef MVFS_DEBUG
     if (vap) {
         struct timeval mtime, ctime;
         VATTR_GET_MTIME_TV(vap, &mtime);
         VATTR_GET_CTIME_TV(vap, &ctime);
-	MDB_VLOG((MFS_VGETATTR,
-		  "vp=%"KS_FMT_PTR_T" mask=%x fromcache=%d, mtime=0x%"KS_FMT_TV_SEC_T_D".%"KS_FMT_TV_USEC_T_D" ctime=0x%"KS_FMT_TV_SEC_T_D".%"KS_FMT_TV_USEC_T_D" err=%d\n",
-		  vp, VATTR_GET_MASK(vap), fromcache,
-		  mtime.tv_sec, mtime.tv_usec,
-		  ctime.tv_sec, ctime.tv_usec,
-		  error));
+        MDB_VLOG((MFS_VGETATTR,
+                  "vp=%"KS_FMT_PTR_T" mask=%x fromcache=%d, mtime=0x%"KS_FMT_TV_SEC_T_D".%"KS_FMT_TV_USEC_T_D" ctime=0x%"KS_FMT_TV_SEC_T_D".%"KS_FMT_TV_USEC_T_D" err=%d\n",
+                  vp, VATTR_GET_MASK(vap), fromcache,
+                  mtime.tv_sec, mtime.tv_usec,
+                  ctime.tv_sec, ctime.tv_usec,
+                  error));
     } else
-	MDB_VLOG((MFS_VGETATTR,"vp=%"KS_FMT_PTR_T" no mask fromcache=%d, err=%d\n",vp, fromcache, error));
+        MDB_VLOG((MFS_VGETATTR,"vp=%"KS_FMT_PTR_T" no mask fromcache=%d, err=%d\n",vp, fromcache, error));
 #endif
     BUMPSTAT(mfs_vnopcnt[MFS_VGETATTR]);
     MVFS_EXIT_FS(mth);
@@ -3130,24 +3133,16 @@ mfs_getattr(
  *      - Have an active cleartext vp for VREG files
  */
 
-int mfs_changeattr_eval_choid(P1(VNODE_T *vp)
-                              PN(VATTR_T *vap)
-                              PN(int flag)
-                              PN(CRED_T *cred)
-                              PN(tbs_boolean_t *choid_needed_p)
-                              PN(u_long *view_db_mask_p)
-                              PN(u_long *clear_mask_p));
-
 int
-mfs_changeattr_eval_choid(vp, vap, flag, cred, choid_needed_p, 
-			  view_db_mask_p, clear_mask_p)
-VNODE_T *vp;
-VATTR_T *vap;
-int flag;
-CRED_T *cred;
-tbs_boolean_t *choid_needed_p;
-u_long *view_db_mask_p;
-u_long *clear_mask_p;
+mfs_changeattr_eval_choid(
+    VNODE_T *vp,
+    VATTR_T *vap,
+    int flag,
+    CALL_DATA_T *cd,
+    tbs_boolean_t *choid_needed_p,
+    u_long *view_db_mask_p,
+    u_long *clear_mask_p
+)
 {
     u_long mask;
     mfs_mnode_t *mnp = VTOM(vp);
@@ -3317,14 +3312,14 @@ mvfs_changeattr(
      */
 
     if (mask & AT_TYPE) {
-	mvfs_log(MFS_LOG_DEBUG, "va_type set on changeattr mask=0x%x\n", mask);
-	error = EINVAL;
-	return(error);
+        mvfs_log(MFS_LOG_DEBUG, "va_type set on changeattr mask=0x%x\n", mask);
+        error = EINVAL;
+        return(error);
     }
     if (mask & AT_NOSET) {
-	mvfs_log(MFS_LOG_DEBUG, "invalid changeattr mask=0x%x\n", mask);
-	error = EINVAL;
-	return(error);
+        mvfs_log(MFS_LOG_DEBUG, "invalid changeattr mask=0x%x\n", mask);
+        error = EINVAL;
+        return(error);
     }
 
     /* Do not allow setting of size for directories */
@@ -3337,46 +3332,46 @@ mvfs_changeattr(
     /* Switch based on class of object */
 
     switch (VTOM(vp)->mn_hdr.mclass) {
-	case MFS_SDEVCLAS:
-	    if (mask & AT_SIZE) error = EINVAL;
-	    /* FIXME: allow this someday for rights/time? */
-	    else error = EPERM;
-	    break;
-	case MFS_LOOPCLAS:
-	    /* 
-	     * Flush our pages to cleartext file.  (M)VOP_SETATTR
-	     * for cleartext is reponsible for any flushing it needs.
-	     */
-	    if (MVFS_ISVTYPE(vp, VREG)) {
-		mvfs_log(MFS_LOG_ERR,
-			"getattr on loopback file node (shouldn't happen), vp=%"KS_FMT_PTR_T"\n", vp);
-		(void) PVN_FLUSH(vp, MFS_PVN_FLUSH, MVFS_CD2CRED(cd));
-	    }
-	    /* Fall through */
-	case MFS_VIEWCLAS:
-	    error = MVOP_SETATTR(MFS_REALVP(vp), vap, flag, cd, ctxp);
-	    break;
-	case MFS_NTVWCLAS:
-	case MFS_VIEWDIRCLAS:
-	    error = EROFS;
-	    break;
-	case MFS_VOBRTCLAS:
-	    vp = mfs_bindroot(vp, cd, &error);
-	    if (error == ESRCH) error = EROFS;  /* No view gets read-only */
-	    if (error) break;
-	    /* Fall through */
-	case MFS_VOBCLAS: {
+        case MFS_SDEVCLAS:
+            if (mask & AT_SIZE) error = EINVAL;
+            /* FIXME: allow this someday for rights/time? */
+            else error = EPERM;
+            break;
+        case MFS_LOOPCLAS:
+            /* 
+             * Flush our pages to cleartext file.  (M)VOP_SETATTR
+             * for cleartext is reponsible for any flushing it needs.
+             */
+            if (MVFS_ISVTYPE(vp, VREG)) {
+                mvfs_log(MFS_LOG_ERR,
+                        "getattr on loopback file node (shouldn't happen), vp=%"KS_FMT_PTR_T"\n", vp);
+                (void)PVN_FLUSH(vp, MFS_PVN_FLUSH, cd);
+            }
+            /* Fall through */
+        case MFS_VIEWCLAS:
+            error = MVOP_SETATTR(MFS_REALVP(vp), vap, flag, cd, ctxp);
+            break;
+        case MFS_NTVWCLAS:
+        case MFS_VIEWDIRCLAS:
+            error = EROFS;
+            break;
+        case MFS_VOBRTCLAS:
+            vp = mfs_bindroot(vp, cd, &error);
+            if (error == ESRCH) error = EROFS;  /* No view gets read-only */
+            if (error) break;
+            /* Fall through */
+        case MFS_VOBCLAS: {
             MOFFSET_T max_offset;
 
             max_offset = MVFS_GET_MAXOFF(vp);
 
             /* Get a vattr struct we can mess around with */
 
-	    if ((VATTR_GET_TYPE(vap) == VREG) && (mask & AT_SIZE) && 
-	        (VATTR_GET_SIZE(vap) > max_offset))
-	    {
-		return(EFBIG);
-	    }
+            if ((VATTR_GET_TYPE(vap) == VREG) && (mask & AT_SIZE) && 
+                (VATTR_GET_SIZE(vap) > max_offset))
+            {
+                return(EFBIG);
+            }
 
             xvap = MVFS_VATTR_ALLOC();
 
@@ -3390,34 +3385,33 @@ mvfs_changeattr(
 
             if (error) break;
 
-	    (void) mfs_rebind_vpp((vp != avp), &vp, cd);
+            (void) mfs_rebind_vpp((vp != avp), &vp, cd);
 
-	    /*
-	     * Sync pages to cleartext.
-	     * MVOP_SETATTR is responsible for any sync the cleartext
-	     * FS requires.
-	     */
+            /*
+             * Sync pages to cleartext.
+             * MVOP_SETATTR is responsible for any sync the cleartext
+             * FS requires.
+             */
             if (MVFS_ISVTYPE(vp, VREG) && VTOM(vp)->mn_hdr.cached_pages) {
-		(void) PVN_FLUSH(vp, MFS_PVN_FLUSH, MVFS_CD2CRED(cd));
-	    }
+                (void)PVN_FLUSH(vp, MFS_PVN_FLUSH, cd);
+            }
+            mnp = VTOM(vp);
+            MLOCK(mnp);
 
-	    mnp = VTOM(vp);
-    	    MLOCK(mnp);
+            if (MVFS_ISVTYPE(vp, VREG)) {
 
-    	    if (MVFS_ISVTYPE(vp, VREG)) {
+                /* 
+                 * Get validated cleartext vnode for clearattr and
+                 * RO cleartext checks below.
+                 */
 
-	        /* 
-	         * Get validated cleartext vnode for clearattr and
-		 * RO cleartext checks below.
-		 */
+                error = mfs_getcleartext(vp, NULL, cd);
+                if (error) {
+                    MUNLOCK(mnp);
+                    break;
+                }
 
-	        error = mfs_getcleartext(vp, NULL, cd);
-	        if (error) {
-		    MUNLOCK(mnp);
-		    break;
-		}
-
-                error = mvfs_clearattr(vp, NULL, MVFS_CD2CRED(cd));
+                error = mvfs_clearattr(vp, NULL, cd);
                 if (error) {
                     MUNLOCK(mnp);
                     break;
@@ -3430,7 +3424,7 @@ mvfs_changeattr(
                 oldsize = mnp->mn_vob.attr.fstat.size;
             }
 
-            error = mfs_changeattr_eval_choid(vp, vap, flag, MVFS_CD2CRED(cd),
+            error = mfs_changeattr_eval_choid(vp, vap, flag, cd,
                     &choid_needed, &view_db_mask, &clear_mask);
             if (error) {
                 MUNLOCK(mnp);
@@ -3439,103 +3433,102 @@ mvfs_changeattr(
 
             if (choid_needed) {
 
-		/* Must be regular file */
-		ASSERT(MVFS_ISVTYPE(vp, VREG));
+                /* Must be regular file */
+                ASSERT(MVFS_ISVTYPE(vp, VREG));
 
-		choidflags = MFS_CHOID_FORCE;
-		/* Set truncate flag if setting length to zero. */
-		if ((mask & AT_SIZE) != 0 && VATTR_GET_SIZE(vap) == 0) 
-			choidflags |= MFS_CHOID_TRUNC;
-		error = mfs_change_oid(vp, choidflags, MFS_SLEEP, cd);
-		if (error) {
-                    MUNLOCK(mnp);
-                    break;
-		}
-	    }
-
-	    if (MVFS_ISVTYPE(vp, VREG)) {
-
-		/* 
-		 * Fetch (and hold a vnode ptr to) the cleartext
-		 * after.  We need the cleartext even if we did
-		 * not do a choid above for setattr done below.
-		 */
-
-		error = mfs_getcleartext(vp, &cvp, cd);
-		if (error) {
-		    MUNLOCK(mnp);
-		    break;
-		}
-
-		/* 
-		 * Flush any dirty cleartext pages before we
-		 * do the setattr call on the cleartext.
-		 */
-		ASSERT(cvp);
-		if (mnp->mn_hdr.clear_dirty) {
-		    (void) PVN_FLUSH(MVFS_CVP_TO_VP(cvp), MFS_PVN_FLUSH,
-                                     MVFS_CD2CRED(cd));
-		    mnp->mn_hdr.clear_dirty = 0;
-		}
-
-	        /*
-	         * Due to various identity transformations, we have to
-	         * be careful that we don't hose the user by allowing
-	         * him to do something in the view/vob which can't
-	         * be done to the cleartext.  Therefore, for all
-	         * ops that require "owner" permissions, make
-	         * sure the user is also the "owner" of the cleartext
-	         * before we do the op to the view.
-	         */
-
-		/* Non truncate ops - probe ownership */
-
-		if (clear_mask & (AT_MODE|AT_UID|AT_GID)) {
-		    error = mfs_clearowner(vp, 
-					   clear_mask & (AT_UID|AT_GID|AT_MODE), 
-					   cd);
-		    if (error) {
-		        mvfs_logperr(MFS_LOG_DEBUG, error,
-			    "setattr: clearowner check"); 
-		        mvfs_log(MFS_LOG_DEBUG, 
-			    "m/u/g/s= 0%o/%d/%d/%"MVFS_FMT_VATTR_SIZE_T_D" a/mtime= 0x%"KS_FMT_TV_SEC_T_X".%"KS_FMT_TV_USEC_T_X"/0x%"KS_FMT_TV_SEC_T_X".%"KS_FMT_TV_USEC_T_X"\n",
-				VATTR_GET_MODE(vap), VATTR_GET_UID(vap),
-				VATTR_GET_GID(vap), VATTR_GET_SIZE(vap),
-				ta.tv_sec, ta.tv_usec, tm.tv_sec, tm.tv_usec);
-			MUNLOCK(mnp);
-			break;
-		    }
-		}
-	    }
-
-	    /*
-	     * Access check for setting atime/mtime (utimes call).
-             * We do this after all the suppression of atime/mtime setting
-             * above.  We also do this because not all systems enforce
-	     * the access check above the setattr vnode op, so we have to
-	     * do it in here.
-	     */
-
-	    if (view_db_mask & (AT_MTIME|AT_ATIME)) {
-                if (((MVFS_COMPARE_MNODE_UID(MVFS_CD2CRED(cd),
-                                             mnp->mn_vob.user_id)) == FALSE) &&
-                     (MVFS_CHKACCESS_MNODE(vp, VWRITE, mnp->mn_vob.user_id,
-                                           mnp->mn_vob.group_id,
-                                           mnp->mn_vob.attr.fstat.mode,
-                                           MVFS_CD2CRED(cd)) != 0))
-                {
-                    error = EACCES;
+                choidflags = MFS_CHOID_FORCE;
+                /* Set truncate flag if setting length to zero. */
+                if ((mask & AT_SIZE) != 0 && VATTR_GET_SIZE(vap) == 0) 
+                        choidflags |= MFS_CHOID_TRUNC;
+                error = mfs_change_oid(vp, choidflags, MFS_SLEEP, cd);
+                if (error) {
                     MUNLOCK(mnp);
                     break;
                 }
             }
-		
-    	    /* Change the attributes in the view.  
-	     * All setattr calls have writer class credentials. 
-	     * Lock around both the change to the view and the change to 
-	     * the cleartext to prevent race conditions 
-	     * For elements with cleartext (i.e VREG), do NOT set the 
-	     * mtime/atime directly here.... for these, we must set the 
+
+            if (MVFS_ISVTYPE(vp, VREG)) {
+
+                /* 
+                 * Fetch (and hold a vnode ptr to) the cleartext
+                 * after.  We need the cleartext even if we did
+                 * not do a choid above for setattr done below.
+                 */
+
+                error = mfs_getcleartext(vp, &cvp, cd);
+                if (error) {
+                    MUNLOCK(mnp);
+                    break;
+                }
+
+                /* 
+                 * Flush any dirty cleartext pages before we
+                 * do the setattr call on the cleartext.
+                 */
+                ASSERT(cvp);
+                if (mnp->mn_hdr.clear_dirty) {
+                    (void)PVN_FLUSH(MVFS_CVP_TO_VP(cvp), MFS_PVN_FLUSH, cd);
+                    mnp->mn_hdr.clear_dirty = 0;
+                }
+
+                /*
+                 * Due to various identity transformations, we have to
+                 * be careful that we don't hose the user by allowing
+                 * him to do something in the view/vob which can't
+                 * be done to the cleartext.  Therefore, for all
+                 * ops that require "owner" permissions, make
+                 * sure the user is also the "owner" of the cleartext
+                 * before we do the op to the view.
+                 */
+
+                /* Non truncate ops - probe ownership */
+
+                if (clear_mask & (AT_MODE|AT_UID|AT_GID)) {
+                    error = mfs_clearowner(vp, 
+                                           clear_mask & (AT_UID|AT_GID|AT_MODE), 
+                                           cd);
+                    if (error) {
+                        mvfs_logperr(MFS_LOG_DEBUG, error,
+                            "setattr: clearowner check"); 
+                        mvfs_log(MFS_LOG_DEBUG, 
+                            "m/u/g/s= 0%o/%d/%d/%"MVFS_FMT_VATTR_SIZE_T_D" a/mtime= 0x%"KS_FMT_TV_SEC_T_X".%"KS_FMT_TV_USEC_T_X"/0x%"KS_FMT_TV_SEC_T_X".%"KS_FMT_TV_USEC_T_X"\n",
+                                VATTR_GET_MODE(vap), VATTR_GET_UID(vap),
+                                VATTR_GET_GID(vap), VATTR_GET_SIZE(vap),
+                                ta.tv_sec, ta.tv_usec, tm.tv_sec, tm.tv_usec);
+                        MUNLOCK(mnp);
+                        break;
+                    }
+                }
+            }
+
+            /*
+             * Access check for setting atime/mtime (utimes call).
+             * We do this after all the suppression of atime/mtime setting
+             * above.  We also do this because not all systems enforce
+             * the access check above the setattr vnode op, so we have to
+             * do it in here.
+             */
+
+            if (view_db_mask & (AT_MTIME|AT_ATIME)) {
+                if (((MVFS_COMPARE_MNODE_UID(MVFS_CD2CRED(cd),
+                        mnp->mn_vob.user_id)) == FALSE) &&
+                     (MVFS_CHKACCESS_MNODE(vp, VWRITE, mnp->mn_vob.user_id,
+                                          mnp->mn_vob.group_id,
+                                          mnp->mn_vob.attr.fstat.mode,
+                                          MVFS_CD2CRED(cd)) != 0)) 
+                {
+                        error = EACCES;
+                        MUNLOCK(mnp);
+                        break;
+                }
+            }
+                
+            /* Change the attributes in the view.  
+             * All setattr calls have writer class credentials. 
+             * Lock around both the change to the view and the change to 
+             * the cleartext to prevent race conditions 
+             * For elements with cleartext (i.e VREG), do NOT set the 
+             * mtime/atime directly here.... for these, we must set the 
              * cleartext first, then go back and sync the cleartext a/mtime 
              * to the view.  The times for set atime/mtime may be set 
              * differently at the server for the cleartext due to different 
@@ -3543,19 +3536,19 @@ mvfs_changeattr(
              * For other types, atime/mtime set in the view now
              */
 
-	    if (MVFS_ISVTYPE(vp, VREG))
-	        VATTR_SET_MASK(xvap, view_db_mask & ~(AT_MTIME|AT_ATIME));
-	    else
-	        VATTR_SET_MASK(xvap, view_db_mask);
-	    error = mvfs_clnt_setattr_locked(vp, xvap, 0, 
+            if (MVFS_ISVTYPE(vp, VREG))
+                VATTR_SET_MASK(xvap, view_db_mask & ~(AT_MTIME|AT_ATIME));
+            else
+                VATTR_SET_MASK(xvap, view_db_mask);
+            error = mvfs_clnt_setattr_locked(vp, xvap, 0, 
                                              MFS_USE_PROCBH, 1, cd, 0);
 
-	    /* Change the attributes on the cleartext */
+            /* Change the attributes on the cleartext */
 
-	    if (!error && cvp && clear_mask != 0) {
-	 	/*
-	   	 * Make copy of original vattr, it may have changed above.
-		 */
+            if (!error && cvp && clear_mask != 0) {
+                /*
+                 * Make copy of original vattr, it may have changed above.
+                 */
                 MVFS_FREE_VATTR_FIELDS(xvap);
                 MVFS_COPY_VATTR(xvap, vap, &error);
                 if (error) {
@@ -3567,23 +3560,23 @@ mvfs_changeattr(
                     break;
                 }
                 VATTR_SET_MASK(xvap, clear_mask);
-		error = MVOP_SETATTR(MVFS_CVP_TO_VP(cvp), xvap, flag, cd, ctxp);
+                error = MVOP_SETATTR(MVFS_CVP_TO_VP(cvp), xvap, flag, cd, ctxp);
 
-		/* Gross hack for setuid programs.  If operation
-	         * fails with EPERM and we are setuid root, then
-	         * try again with our "real id" to handle untrusted
- 		 * root over the net.
-		 */
-		if (error == EPERM && MDKI_CR_IS_SETUID_ROOT(MVFS_CD2CRED(cd)))
+                /* Gross hack for setuid programs.  If operation
+                 * fails with EPERM and we are setuid root, then
+                 * try again with our "real id" to handle untrusted
+                 * root over the net.
+                 */
+                if (error == EPERM && MDKI_CR_IS_SETUID_ROOT(MVFS_CD2CRED(cd)))
                 {
-		    MDKI_CR_SET_E2RUID(MVFS_CD2CRED(cd));
-		    error = MVOP_SETATTR(MFS_REALVP(vp), xvap, flag, cd, ctxp);
-		    MDKI_CR_SET_E2ROOTUID(MVFS_CD2CRED(cd));
-		    mvfs_logperr(MFS_LOG_DEBUG, error, 
-				"setattr: setuid root retry");
-	 	}
+                    MDKI_CR_SET_E2RUID(MVFS_CD2CRED(cd));
+                    error = MVOP_SETATTR(MFS_REALVP(vp), xvap, flag, cd, ctxp);
+                    MDKI_CR_SET_E2ROOTUID(MVFS_CD2CRED(cd));
+                    mvfs_logperr(MFS_LOG_DEBUG, error, 
+                                "setattr: setuid root retry");
+                }
 
-		if (error) {
+                if (error) {
                     /*
                      * The view and cleartext attrs may now be inconsistent,
                      * perhaps because cltxt (NFS) permissions are more
@@ -3615,71 +3608,69 @@ mvfs_changeattr(
                     }
                 }
                 if (error == 0) {
-		    /* Fetch out latest/best cleartext attributes. */
-	            error = mvfs_clearattr(vp, NULL, MVFS_CD2CRED(cd));
-		    /* 
-		     * Make sure size matches what we think we set 
-		     * Otherwise, subsequent 'size' merges will with the mnode
+                    /* Fetch out latest/best cleartext attributes. */
+                    error = mvfs_clearattr(vp, NULL, cd);
+                    /* 
+                     * Make sure size matches what we think we set 
+                     * Otherwise, subsequent 'size' merges will with the mnode
                      * stats will be using stale data from the cleartext file
                      * and will cause mistakes in the MVFS.
                      */
-		    if (clear_mask & AT_SIZE) {
-		        if (VATTR_GET_SIZE(&mnp->mn_vob.cleartext.va) != 
-								VATTR_GET_SIZE(vap)) {
-			    mvfs_log(MFS_LOG_DEBUG, 
-				"setattr: cleartext size %"MVFS_FMT_VATTR_SIZE_T_D" != truncate size %"MVFS_FMT_VATTR_SIZE_T_D"\n", 
-					VATTR_GET_SIZE(&mnp->mn_vob.cleartext.va),
-					VATTR_GET_SIZE(vap));
-			}
-		    }
+                    if (clear_mask & AT_SIZE) {
+                        if (VATTR_GET_SIZE(&mnp->mn_vob.cleartext.va) != 
+                                                                VATTR_GET_SIZE(vap)) {
+                            mvfs_log(MFS_LOG_DEBUG, 
+                                "setattr: cleartext size %"MVFS_FMT_VATTR_SIZE_T_D" != truncate size %"MVFS_FMT_VATTR_SIZE_T_D"\n", 
+                                        VATTR_GET_SIZE(&mnp->mn_vob.cleartext.va),
+                                        VATTR_GET_SIZE(vap));
+                        }
+                    }
 
-		    /* If updated size or mtime, then must sync the mtime */
-		    if ((clear_mask & (AT_SIZE|AT_MTIME)) != 0 || sverr != 0) {
-			VTOM(vp)->mn_vob.sync_mtime = 1;
-		    }
-		    /* If we have set mtime or atime, 
-		     * then we must sync the attributes from the
-	             * cleartext back to the view.  (These ops
-		     * have the cleartext as 'master'
-		     */
-		    if ((clear_mask & (AT_MTIME|AT_ATIME)) != 0 || sverr != 0)
-                    {
-		        VATTR_NULL(xvap);	/* Create null xvap for sync */
-	                error = mvfs_clnt_setattr_locked(vp, xvap, 0,
-						MFS_USE_PROCBH, 1,
-                                                cd, 0);
-			mvfs_logperr(MFS_LOG_WARN, error,
-			  "setattr: sync_mtime failed: vw=%s vob=%s dbid=0x%x",
-			    mfs_vp2vw(vp), mfs_vp2dev(vp), mfs_vp2dbid(vp));
-			error = 0;	/* Don't fail op for this... */
-		    }
-		}
+                    /* If updated size or mtime, then must sync the mtime */
+                    if ((clear_mask & (AT_SIZE|AT_MTIME)) != 0 || sverr != 0) {
+                        VTOM(vp)->mn_vob.sync_mtime = 1;
+                    }
+                    /* If we have set mtime or atime, 
+                     * then we must sync the attributes from the
+                     * cleartext back to the view.  (These ops
+                     * have the cleartext as 'master'
+                     */
+                    if ((clear_mask & (AT_MTIME|AT_ATIME)) != 0 || sverr != 0) {
+                        VATTR_NULL(xvap);	/* Create null xvap for sync */
+                        error = mvfs_clnt_setattr_locked(vp, xvap, 0,
+                                                MFS_USE_PROCBH, 1, cd, 0);
+                        mvfs_logperr(MFS_LOG_WARN, error,
+                          "setattr: sync_mtime failed: vw=%s vob=%s dbid=0x%x",
+                            mfs_vp2vw(vp), mfs_vp2dev(vp), mfs_vp2dbid(vp));
+                        error = 0;	/* Don't fail op for this... */
+                    }
+                }
             }
             MUNLOCK(VTOM(vp));
             if (sverr)
                 error = sverr;
 
-	    /* 
-	     * If we successfully updated the size, then
-	     * we must notify the VM subsystem to toss any
-	     * cached pages past the end of the file.
-	     */
-	    if (!error && ((mask & AT_SIZE) != 0) && (MVFS_ISVTYPE(vp, VREG))) {
-		PVN_TRUNC(vp, flag, VATTR_GET_SIZE(vap), oldsize,
+            /* 
+             * If we successfully updated the size, then
+             * we must notify the VM subsystem to toss any
+             * cached pages past the end of the file.
+             */
+            if (!error && ((mask & AT_SIZE) != 0) && (MVFS_ISVTYPE(vp, VREG))) {
+                PVN_TRUNC(vp, flag, VATTR_GET_SIZE(vap), oldsize,
                           MVFS_CD2CRED(cd));
-	    }
+            }
 
-	    break;
-	}
-	default:
-	    error = ENXIO;
-	    break;
+            break;
+        }
+        default:
+            error = ENXIO;
+            break;
     }
 
     /* Audit if no error and truncating a file to 0 */
     if (!error && MVFS_ISVTYPE(vp, VREG) && ((mask & AT_SIZE) != 0) &&
-	VATTR_GET_SIZE(vap) == 0) {
-	MFS_AUDIT(MFS_AR_TRUNCATE,NULL,NULL,NULL,NULL,vp,cd);
+        VATTR_GET_SIZE(vap) == 0) {
+        MFS_AUDIT(MFS_AR_TRUNCATE,NULL,NULL,NULL,NULL,vp,cd);
     }
 
     if (xvap != NULL) {
@@ -3687,14 +3678,16 @@ mvfs_changeattr(
         MVFS_VATTR_FREE(xvap);
     }
 
-    if (cvp != NULL) CVN_RELE(cvp); /* Release held cleartext if one */
-    if (vp != avp) VN_RELE(vp);   /* Release if allocated bound root vnode */
+    if (cvp != NULL)
+        CVN_RELE(cvp, cd);      /* Release held cleartext if one */
+    if (vp != avp)
+        ATRIA_VN_RELE(vp, cd);  /* Release if allocated bound root vnode */
 
     MDB_VLOG((MFS_VSETATTR,"vp=%"KS_FMT_PTR_T" msk=%x flg=%x m/u/g/s = 0%o/%d/%d/%"MVFS_FMT_VATTR_SIZE_T_D"\n\ta/mtime=0x%"KS_FMT_TV_SEC_T_X".%"KS_FMT_TV_USEC_T_X"/0x%"KS_FMT_TV_SEC_T_X".%"KS_FMT_TV_USEC_T_X" err=%d\n",vp, 
-	    VATTR_GET_MASK(vap), flag,
-		VATTR_GET_MODE(vap), VATTR_GET_UID(vap), VATTR_GET_GID(vap),
-		VATTR_GET_SIZE(vap), ta.tv_sec, ta.tv_usec, 
-		tm.tv_sec, tm.tv_usec, error));
+            VATTR_GET_MASK(vap), flag,
+                VATTR_GET_MODE(vap), VATTR_GET_UID(vap), VATTR_GET_GID(vap),
+                VATTR_GET_SIZE(vap), ta.tv_sec, ta.tv_usec, 
+                tm.tv_sec, tm.tv_usec, error));
     BUMPSTAT(mfs_vnopcnt[MFS_VSETATTR]);
     MVFS_EXIT_FS(mth);
     return (error);
@@ -3833,7 +3826,7 @@ mvfs_accessv_ctx(
     }
     error = MVFS_CHKACCESS(vp, mode, &va, MVFS_CD2CRED(cd));
     if (vp != avp) {
-        VN_RELE(vp); /* We bound it (and held it) above. */
+        ATRIA_VN_RELE(vp,cd); /* We bound it (and held it) above. */
     }
   cleanup:
     MVFS_FREE_VATTR_FIELDS(&va);
@@ -3864,7 +3857,7 @@ mfs_readlink(
        Standard error is "ENXIO". */
 
     if (!MVFS_ISVTYPE(vp, VLNK)) {
-	return (ENXIO);
+        return (ENXIO);
     }
     MVFS_ENTER_FS(mth);
 
@@ -3872,94 +3865,95 @@ mfs_readlink(
        of objects are not included as they can not be symlinks. */
 
     switch (VTOM(vp)->mn_hdr.mclass) {
-	case MFS_LOOPCLAS:	/* Pass on to real vnode */
-	    error = MVOP_READLINK(MFS_REALVP(vp), uiop, cd);
-	    break;
-	case MFS_VOBCLAS: {
+        case MFS_LOOPCLAS:	/* Pass on to real vnode */
+            error = MVOP_READLINK(MFS_REALVP(vp), uiop, cd);
+            break;
+        case MFS_VOBCLAS: {
 
-	    /* 
-	     * First, check for a cached version of the link text.
- 	     * Stale text is purged by a "lookup" or stat
+            /* 
+             * First, check for a cached version of the link text.
+             * Stale text is purged by a "lookup" or stat
              * which finds that the vnode is modified. 
-	     * (see the code in mfs_attrcache() if it detects a modified
+             * (see the code in mfs_attrcache() if it detects a modified
              *  object)
-	     * The logic to allow us to do this is based on the fact
+             * The logic to allow us to do this is based on the fact
              * that to change the contents of a symlink, you must
              * remove and re-create it.  That makes a change to the dir,
              * which flushes the name cache translation to this symlink,
              * which forces a lookup of the symlink object again, which
              * will revalidate/purge the cached symlink text and force
              * us to refetch the new version.
-	     */
-	    mnp = VTOM(vp);
- 	    MLOCK(mnp);
-	    if (mcdp->mvfs_rlenabled && mnp->mn_vob.slinktext) {
-		BUMPSTAT(mfs_rlstat.rl_hits);
-		/* Cached entry is a string, links don't move the NULL */
-		error = UIOMOVE(mnp->mn_vob.slinktext, 
-				mnp->mn_vob.slinklen-1, UIO_READ, uiop);
-		/* Make a copy of the link text, so that audit call is not
-		 * affected if a cache update races in and frees the text
-  		 * after we unlock.
-		 */
-		lnkbuf = STRDUP(mnp->mn_vob.slinktext);
-		MUNLOCK(mnp);
-		MFS_AUDIT(MFS_AR_RDLINK, NULL, lnkbuf, NULL, NULL, vp, cd);
-		STRFREE(lnkbuf);
-		break;
-	    }
-		
-	    BUMPSTAT(mfs_rlstat.rl_misses);	
-	    lnkbuf = (char *)KMEM_ALLOC(MAXPATHLEN, KM_SLEEP);
-	    if (lnkbuf == NULL) {
-		error = ENOMEM;
-		MUNLOCK(mnp);
-		break;
-	    }
-	    error = mfs_clnt_readlink(vp, lnkbuf, &lnklen, cd);
-	    if (!error) {
-	        error = UIOMOVE(lnkbuf, (int)lnklen, UIO_READ, uiop);
+             */
+            mnp = VTOM(vp);
+            MLOCK(mnp);
+            if (mcdp->mvfs_rlenabled && mnp->mn_vob.slinktext) {
+                BUMPSTAT(mfs_rlstat.rl_hits);
+                /* Cached entry is a string, links don't move the NULL */
+                error = UIOMOVE(mnp->mn_vob.slinktext, 
+                                mnp->mn_vob.slinklen-1, UIO_READ, uiop);
+                /* Make a copy of the link text, so that audit call is not
+                 * affected if a cache update races in and frees the text
+                 * after we unlock.
+                 */
+                lnkbuf = STRDUP(mnp->mn_vob.slinktext);
+                MUNLOCK(mnp);
+                MFS_AUDIT(MFS_AR_RDLINK, NULL, lnkbuf, NULL, NULL, vp, cd);
+                STRFREE(lnkbuf);
+                break;
+            }
+                
+            BUMPSTAT(mfs_rlstat.rl_misses);	
+            lnkbuf = (char *)KMEM_ALLOC(MAXPATHLEN, KM_SLEEP);
+            if (lnkbuf == NULL) {
+                error = ENOMEM;
+                MUNLOCK(mnp);
+                break;
+            }
+            error = mfs_clnt_readlink(vp, lnkbuf, &lnklen, cd);
+            if (!error) {
+                error = UIOMOVE(lnkbuf, (int)lnklen, UIO_READ, uiop);
 
-		ASSERT(lnklen < MAXPATHLEN);
-		lnkbuf[lnklen] = '\0';	/* Force null to make a str */
-		
-		/* Cache symlink contents for next time */
+                ASSERT(lnklen < MAXPATHLEN);
+                lnkbuf[lnklen] = '\0';	/* Force null to make a str */
+                
+                /* Cache symlink contents for next time */
 
-		if (mcdp->mvfs_rlenabled) {
-		    if (mnp->mn_vob.slinktext) {
-		        KMEM_FREE(mnp->mn_vob.slinktext, mnp->mn_vob.slinklen);
-		        mnp->mn_vob.slinktext = NULL;
-		        mnp->mn_vob.slinklen = 0;
-		    }
-	
+                if (mcdp->mvfs_rlenabled) {
+                    if (mnp->mn_vob.slinktext) {
+                        KMEM_FREE(mnp->mn_vob.slinktext, mnp->mn_vob.slinklen);
+                        mnp->mn_vob.slinktext = NULL;
+                        mnp->mn_vob.slinklen = 0;
+                    }
+        
                     /* Cache the symlink text with a NULL appended to make
                        it a string for auditing (see mfs_audit()) */	
-		    mnp->mn_vob.slinktext = 
-		        (char *)KMEM_ALLOC(lnklen+1, KM_SLEEP);
-		    if (mnp->mn_vob.slinktext) {
-		        BCOPY(lnkbuf, mnp->mn_vob.slinktext, lnklen+1);
-		        mnp->mn_vob.slinklen = lnklen+1;
-	 	    }
-	  	}
+                    mnp->mn_vob.slinktext = 
+                        (char *)KMEM_ALLOC(lnklen+1, KM_SLEEP);
+                    if (mnp->mn_vob.slinktext) {
+                        BCOPY(lnkbuf, mnp->mn_vob.slinktext, lnklen+1);
+                        mnp->mn_vob.slinklen = lnklen+1;
+                    }
+                }
 
-		/* Must unlock before audit */
+                /* Must unlock before audit */
 
-		MUNLOCK(mnp);
+                MUNLOCK(mnp);
 
-	        /* Do auditing */
-		MFS_AUDIT(MFS_AR_RDLINK, NULL, lnkbuf, NULL, NULL, vp, cd);
-	    } else {
-		MUNLOCK(mnp);
-	    }
-	    KMEM_FREE(lnkbuf, MAXPATHLEN);
-	    break;
-	}
-	default:
-	    error = ENXIO;
-	    break;
+                /* Do auditing */
+                MFS_AUDIT(MFS_AR_RDLINK, NULL, lnkbuf, NULL, NULL, vp, cd);
+            } else {
+                MUNLOCK(mnp);
+            }
+            KMEM_FREE(lnkbuf, MAXPATHLEN);
+            break;
+        }
+        default:
+            error = ENXIO;
+            break;
     }
 
-    if (vp != avp) VN_RELE(vp);   /* Release if allocated bound root vnode */
+    if (vp != avp)
+        ATRIA_VN_RELE(vp, cd);  /* Release if allocated bound root vnode */
 
     MDB_VLOG((MFS_VREADLINK,"vp=%"KS_FMT_PTR_T" err=%d\n",vp,error));
     BUMPSTAT(mfs_vnopcnt[MFS_VREADLINK]);
@@ -4019,175 +4013,172 @@ mfs_inactive_common(
 
     error = 0;
     switch (mnp->mn_hdr.mclass) {
-	case MFS_SDEVCLAS:
-	case MFS_VIEWCLAS:
-	case MFS_VIEWDIRCLAS:
-	case MFS_VOBRTCLAS:
-	    break;
-	case MFS_NTVWCLAS:
-	    break;
-	/* Loopback.  Sync IO associated with the loopback vnode,
+        case MFS_SDEVCLAS:
+        case MFS_VIEWCLAS:
+        case MFS_VIEWDIRCLAS:
+        case MFS_VOBRTCLAS:
+        case MFS_NTVWCLAS:
+            break;
+        /* Loopback.  Sync IO associated with the loopback vnode,
          * No need to sync the cleartext vnode, it will be sync'd
          * with the VN_RELE() later when we dump the vnode.
          * THIS ONLY WORKS BECAUSE WE DON'T CACHE LOOPBACK CLEARTEXT
-	 * VNODE PTRS.
+         * VNODE PTRS.
          */
-	case MFS_LOOPCLAS:
-	    break;
-	case MFS_VOBCLAS: {
-
-    	    /* 
-	     * No delayed operations on dirs (remove, pages to write etc.)
-       	     * Just return OK to make sure no possibility of DB deadlock.
-	     * No need to purge name cache, we can't be here
+        case MFS_LOOPCLAS:
+            break;
+        case MFS_VOBCLAS: {
+            /* 
+             * No delayed operations on dirs (remove, pages to write etc.)
+             * Just return OK to make sure no possibility of DB deadlock.
+             * No need to purge name cache, we can't be here
              * unless all cache entries (and their hold counts)
              * have been released! 
              */
 
-    	    if (MVFS_ISVTYPE(vp, VDIR)) {
-		break;
-	    }
+            if (MVFS_ISVTYPE(vp, VDIR)) {
+                break;
+            }
 
-	    /* Sync dirty pages of the cleartext vnode (if any)
-	     * to the home node.  This is the necessary hook to try
-	     * to make third-party accesses work reasonably.
-	     *
-	     * Note that this sync must be done with the mnode locked,
-	     * to avoid races with other inactivators.  The alternative
-	     * would be to grab an extra reference to the realvp, but
-	     * just holding the mnode locked is cheaper.
-	     *
-	     * Note that I don't do this if inactive is being
-	     * called with the nosleep flag.  To do so could
-	     * cause deadlocks because the scan of the vnode for
-	     * dirty pages might wait on a locked page which
-	     * can't be paged out (via NFS) because the networking
-	     * code needs free memory that only the caller can
- 	     * make available (e.g. pageout daemon in some architectures).
-	     */
-	    if (mnp->mn_hdr.clear_dirty && mnp->mn_hdr.realvp &&
-				sleep_flag == MFS_INACTIVE_SLEEP) {
-	        (void) PVN_FLUSH(MVFS_CVP_TO_VP(mnp->mn_hdr.realvp),
-                                 MFS_PVN_FLUSH, MVFS_CD2CRED(cd));
+            /* Sync dirty pages of the cleartext vnode (if any)
+             * to the home node.  This is the necessary hook to try
+             * to make third-party accesses work reasonably.
+             *
+             * Note that this sync must be done with the mnode locked,
+             * to avoid races with other inactivators.  The alternative
+             * would be to grab an extra reference to the realvp, but
+             * just holding the mnode locked is cheaper.
+             *
+             * Note that I don't do this if inactive is being
+             * called with the nosleep flag.  To do so could
+             * cause deadlocks because the scan of the vnode for
+             * dirty pages might wait on a locked page which
+             * can't be paged out (via NFS) because the networking
+             * code needs free memory that only the caller can
+             * make available (e.g. pageout daemon in some architectures).
+             */
+            if (mnp->mn_hdr.clear_dirty && mnp->mn_hdr.realvp &&
+                sleep_flag == MFS_INACTIVE_SLEEP)
+            {
+                (void)PVN_FLUSH(MVFS_CVP_TO_VP(mnp->mn_hdr.realvp),
+                                MFS_PVN_FLUSH, cd);
 
 #ifdef NFSV4_SHADOW_VNODE
                 if (mnp->mn_hdr.realvp_master) {
-                    (void) PVN_FLUSH(MVFS_CVP_TO_VP(mnp->mn_hdr.realvp_master),
-                                 MFS_PVN_FLUSH, MVFS_CD2CRED(cd));
+                    (void)PVN_FLUSH(MVFS_CVP_TO_VP(mnp->mn_hdr.realvp_master),
+                                    MFS_PVN_FLUSH, cd);
                 }
 #endif
 
-		mnp->mn_vob.sync_mtime = 1;  /* Sync mtime */
-		mnp->mn_hdr.clear_dirty = 0;
-	    }
-	    mnp->mn_vob.cleartext.used = 0;	/* turn off ref bit */
+                mnp->mn_vob.sync_mtime = 1;  /* Sync mtime */
+                mnp->mn_hdr.clear_dirty = 0;
+            }
+            mnp->mn_vob.cleartext.used = 0;	/* turn off ref bit */
 
-    	    /* Remove the renamed file if the user did a remove
-       	     * while the file was open. 
-	     * NOTE: All delayed operations in inactive must be done
+            /* Remove the renamed file if the user did a remove
+             * while the file was open. 
+             * NOTE: All delayed operations in inactive must be done
              *       with a NULL build handle, as the build handle of
              *       the current process may well be meaningless to
              *       the view this object is in.
-	     */
-
-    	    if (mnp->mn_vob.rmv_name) {
-		VNODE_T *dvp;
-		char *rmv_name;
-		CALL_DATA_T *tmp_cd;
-
-		ASSERT(mnp->mn_vob.rmv_dvp);
-		ASSERT(mnp->mn_vob.rmv_cred);
-		/*
-		 * We must drop the lock on this node--the leaf--while
-		 * we do the remove, since the remove will lock the parent,
-		 * and that is a locking order violation and a potential
-		 * deadlock situation.
-		 */
-		tmp_cd = MVFS_ALLOC_SUBSTITUTE_CRED(cd, mnp->mn_vob.rmv_cred);
-		rmv_name = mnp->mn_vob.rmv_name;
-		dvp = mnp->mn_vob.rmv_dvp;
-		mnp->mn_vob.rmv_dvp = NULL;
-		mnp->mn_vob.rmv_name = NULL;
-		mnp->mn_vob.rmv_cred = NULL;
-
-		MUNLOCK(mnp);
-		error = mfs_clnt_remove(dvp, rmv_name, MFS_USE_NULLBH,
-                            sleep_flag == MFS_INACTIVE_SLEEP ? TRUE : FALSE,
-                            tmp_cd);
-		MLOCK(mnp);
-
-		/* Just removed it, don't need attr cred now. */
-
-		if (!error) {
-	    	    MFS_ATTRINVAL(vp);	/* Link count changed */
-	    	    /* Mark cleartext for purging of info on inactive */
-	    	    mfs_clear_mark_name_purge(vp);
-		} else {
-		    mvfs_logperr(MFS_LOG_WARN, error, 
-			"inactive: can't remove: vw=%s vob=%s dbid=0x%x nm=%s",
-				mfs_vp2vw(dvp),
-				mfs_vp2dev(dvp),
-				mfs_vp2dbid(dvp),
-				rmv_name);
-		}
-
-		/* Don't propagate attempted remove error after logging
-		 * it.
-		 */
-
-		error = 0;
-	
-		/* Release resources for delayed remove.  Note
-	   	that I don't care a hoot about whether there was
-	   	an error on the remove or not .. I did the best
-           	I could. This could leave stranded files in error
-	   	conditions (like network failures) */
-
-		VN_RELE(dvp);
-		KMEM_FREE(rmv_name, STRLEN(rmv_name)+1);
-		MDKI_CRFREE(MVFS_CD2CRED(tmp_cd));
-                MVFS_FREE_SUBSTITUTE_CRED(tmp_cd);
-    	    }
-
-    	    /* 
-	     * Sync the view with the cleartext file. 
-             * Do this only if not vhand running.  If the
-	     * pagedaemon is running, then do not
-	     * attempt this as the cleartext 'getattr' will
-	     * first attempt to flush all cleartext pages to the
-	     * home node and may cause deadlocks.
              */
 
-	    if (sleep_flag == MFS_INACTIVE_SLEEP) 
-			mvfs_sync_attr(mnp, NULL, MFS_USE_NULLBH, 0, cd);
+            if (mnp->mn_vob.rmv_name) {
+                VNODE_T *dvp;
+                char *rmv_name;
+                CALL_DATA_T *tmp_cd;
 
-    	    /* Debug check that no delwri pages before we clear
-       	       the attributes needed by mfs_strategy or mfs_putpage calls.
-               FIXME: not MP safe!  */
+                ASSERT(mnp->mn_vob.rmv_dvp);
+                ASSERT(mnp->mn_vob.rmv_cred);
+                /*
+                 * We must drop the lock on this node--the leaf--while
+                 * we do the remove, since the remove will lock the parent,
+                 * and that is a locking order violation and a potential
+                 * deadlock situation.
+                 */
+                tmp_cd = MVFS_ALLOC_SUBSTITUTE_CRED(cd, mnp->mn_vob.rmv_cred);
+                rmv_name = mnp->mn_vob.rmv_name;
+                dvp = mnp->mn_vob.rmv_dvp;
+                mnp->mn_vob.rmv_dvp = NULL;
+                mnp->mn_vob.rmv_name = NULL;
+                mnp->mn_vob.rmv_cred = NULL;
 
-    	    MDB_NODELWRI(vp);
+                MUNLOCK(mnp);
+                error = mfs_clnt_remove(dvp, rmv_name, MFS_USE_NULLBH,
+                            sleep_flag == MFS_INACTIVE_SLEEP ? TRUE : FALSE,
+                            tmp_cd);
+                MLOCK(mnp);
 
-    	    /* Clear attribute credentials regardless */
+                /* Just removed it, don't need attr cred now. */
 
-	    MCLRCRED(mnp);
+                if (!error) {
+                    MFS_ATTRINVAL(vp);	/* Link count changed */
+                    /* Mark cleartext for purging of info on inactive */
+                    mfs_clear_mark_name_purge(vp);
+                } else {
+                    mvfs_logperr(MFS_LOG_WARN, error, 
+                        "inactive: can't remove: vw=%s vob=%s dbid=0x%x nm=%s",
+                                mfs_vp2vw(dvp),
+                                mfs_vp2dev(dvp),
+                                mfs_vp2dbid(dvp),
+                                rmv_name);
+                }
 
-	    /* 
+                /* Don't propagate attempted remove error after logging
+                 * it.
+                 */
+
+                error = 0;
+        
+                /* Release resources for delayed remove.  Note
+                that I don't care a hoot about whether there was
+                an error on the remove or not .. I did the best
+                I could. This could leave stranded files in error
+                conditions (like network failures) */
+
+                ATRIA_VN_RELE(dvp, tmp_cd);
+                KMEM_FREE(rmv_name, STRLEN(rmv_name)+1);
+                MDKI_CRFREE(MVFS_CD2CRED(tmp_cd));
+                MVFS_FREE_SUBSTITUTE_CRED(tmp_cd);
+            }
+
+            /* 
+             * Sync the view with the cleartext file. 
+             * Do this only if not vhand running.  If the
+             * pagedaemon is running, then do not
+             * attempt this as the cleartext 'getattr' will
+             * first attempt to flush all cleartext pages to the
+             * home node and may cause deadlocks.
+             */
+
+            if (sleep_flag == MFS_INACTIVE_SLEEP) 
+                        mvfs_sync_attr(mnp, NULL, MFS_USE_NULLBH, 0, cd);
+
+            /* Debug check that no delwri pages before we clear
+       	     * the attributes needed by mfs_strategy or mfs_putpage calls.
+             * FIXME: not MP safe!  Taking out for now.  
+    	     * MDB_NODELWRI(vp); */
+
+            /* Clear attribute credentials regardless */
+
+            MCLRCRED(mnp);
+
+            /* 
              * Finally, if there was a RW error on the cleartext
-	     * purge it now.  NFS saves the last IO error, and will
-	     * continue to return it until its vnode is inactivated.
-	     * This is bad if we hold on to the vnode, and NFS
-	     * returns a bogus saved error on a completely different
-	     * user open.
-	     */
-
-		(void) mfs_clear_rele(vp, MVFS_CD2CRED(cd));
-
-	    error = 0;	
+	         * purge it now (error is checked in mfs_clear_rele()).  
+             * NFS saves the last IO error, and will
+             * continue to return it until its vnode is inactivated. 
+	         * This is bad if we hold on to the mnode, and NFS
+	         * returns a bogus saved error on a completely different
+	         * user open.
+	         */
+	    (void) mfs_clear_rele(vp, cd);
+	    error = 0;
 	    break;
-	}
-	default:
+	  }
+	  default:
 	    error = ENXIO;
-	    break;
+	    break;  
     }
 
     MDB_VLOG((MFS_VINACTIVE,"vp=%"KS_FMT_PTR_T" err=%d mnp=%"KS_FMT_PTR_T" cnt = %d\n",vp,error,mnp,
@@ -4241,14 +4232,14 @@ mvfs_lookup_ctx(
     if (!MVFS_ISVTYPE(dvp, VDIR)) return (ENOTDIR);
     if (nm == NULL || nm[0] == '\0') {
 #ifdef MVFS_NULL_NAME_ALLOWED
-	mth = MVFS_GET_THREAD(cd);
-	VN_HOLD(dvp);
-	*vpp = dvp;
-	error = 0;
-	goto do_audit;
+        mth = MVFS_GET_THREAD(cd);
+        VN_HOLD(dvp);
+        *vpp = dvp;
+        error = 0;
+        goto do_audit;
 #else
-	mvfs_log(MFS_LOG_ERR, "mfs_lookup: null name\n");
-	return (EINVAL);
+        mvfs_log(MFS_LOG_ERR, "mfs_lookup: null name\n");
+        return (EINVAL);
 #endif
     }
 
@@ -4262,345 +4253,343 @@ mvfs_lookup_ctx(
 
     ASSERT(VTOM(dvp)->mn_hdr.vp);
     switch (VTOM(dvp)->mn_hdr.mclass) {
-	case MFS_NTVWCLAS:
+        case MFS_NTVWCLAS:
             /* We don't pass rdir since it isn't used */
-	    error = mvfs_ntvw_lookup(advp, nm, vpp, pnp, flags, NULL,
-                    MVFS_CD2CRED(cd));
-	    break;
-	case MFS_VIEWCLAS:
-	    if (MVFS_THREAD_LOOKUP_ROOT(mth)) {
-	        /*
-	         * if there has been a setview, any lookup through root
-	         * comes here.  If the lookup is trying to go through
-	         * the real root, switch it now.
-	         */
-	    	error = MVFS_ROOT_LOOKUP(MVFS_THREAD_LOOKUP_ROOT(mth), 
-	    				 nm, vpp, pnp, flags, MVFS_CD2CRED(cd),
+            error = mvfs_ntvw_lookup(advp, nm, vpp, pnp, flags, NULL, cd);
+            break;
+        case MFS_VIEWCLAS:
+            if (MVFS_THREAD_LOOKUP_ROOT(mth)) {
+                /*
+                 * if there has been a setview, any lookup through root
+                 * comes here.  If the lookup is trying to go through
+                 * the real root, switch it now.
+                 */
+                error = MVFS_ROOT_LOOKUP(MVFS_THREAD_LOOKUP_ROOT(mth), 
+                                         nm, vpp, pnp, flags, MVFS_CD2CRED(cd),
                                          ctxp);
-	        goto noauditout;	/* these are never auditted */
-	    }
-	    if (PN_STRCMP(MVFS_PN_CI_LOOKUP(pnp),nm, ".") == 0) {    /* Handle "." */
-		*vpp = dvp;
-		VN_HOLD(*vpp);
-		error = 0;
-		break;
-	    } else if (PN_STRCMP(MVFS_PN_CI_LOOKUP(pnp), nm, "..") == 0) {  /* Handle ".." */
+                goto noauditout;	/* these are never auditted */
+            }
+            if (PN_STRCMP(MVFS_PN_CI_LOOKUP(pnp),nm, ".") == 0) {    /* Handle "." */
+                *vpp = dvp;
+                VN_HOLD(*vpp);
+                error = 0;
+                break;
+            } else if (PN_STRCMP(MVFS_PN_CI_LOOKUP(pnp), nm, "..") == 0) {  /* Handle ".." */
                 /*
                  * dotdot from a view gets to the viewroot, assuming
                  * the view is not stale.
                  */
                 MLOCK(VTOM(dvp));
-	        if (VTOM(dvp)->mn_view.id == MFS_NULLVID) {
-		    error = ESTALE;	/* Stale view */
+                if (VTOM(dvp)->mn_view.id == MFS_NULLVID) {
+                    error = ESTALE;	/* Stale view */
                     MUNLOCK(VTOM(dvp));
-		    break;
-		}
+                    break;
+                }
                 MUNLOCK(VTOM(dvp));
-		*vpp = mfs_getviewroot(); /* includes a HOLD */
+                *vpp = mfs_getviewroot(); /* includes a HOLD */
                 if (*vpp == NULL)
                     error = ESTALE;
                 else
                     error = 0;
-		break;
-	    /* 
+                break;
+            /* 
              * VERY FUNKY.  Lookup "SETVIEW^" leaves you at "." in
-	     * the viewtag, but sets your current proc view
-	     */
-	    } else if (PN_STRCMP(MVFS_PN_CI_LOOKUP(pnp), nm, "SETVIEW^") == 0) {
-		VN_HOLD(dvp);		/* A hold for the setview call */
-		error = MVFS_SET_PROCVIEW(dvp, NULL);	/* Set the view */
-		if (!error) {
-		    *vpp = dvp;			/* Return current dir */
-		    VN_HOLD(*vpp);		/* One hold for the return vp */
-		}
-		break;
-	    } else if (PN_STRCMP(MVFS_PN_CI_LOOKUP(pnp), nm, "VIEWPVT^") == 0) {
-		/* 
-		 * This name sets the "always cover" bit in the
-		 * view-tag.  In views with this bit set, all lookups
-		 * make loopback nodes to cover any non-atria dirs.
-		 */
-		*vpp = dvp;		/* Return view-tag */
-		VN_HOLD(*vpp);		/* One hold for the return vp */
-		VTOM(dvp)->mn_view.always_cover = 1;	/* Always cover */
-		error = 0;
-		break;
-	    } else if (PN_STRCMP(MVFS_PN_CI_LOOKUP(pnp), nm, "VIEWSHR^") == 0) {
-		/* Undo view-private set above */
-		*vpp = dvp;
-		VN_HOLD(*vpp);
-		VTOM(dvp)->mn_view.always_cover = 0;
-		error = 0;
-		break;
-	    }
-	    /* Fall through */
-	case MFS_LOOPCLAS:	/* Pass on to real vnode */
-	    ASSERT(MFS_REALVP(dvp));
+             * the viewtag, but sets your current proc view
+             */
+            } else if (PN_STRCMP(MVFS_PN_CI_LOOKUP(pnp), nm, "SETVIEW^") == 0) {
+                VN_HOLD(dvp);		/* A hold for the setview call */
+                error = MVFS_SET_PROCVIEW(dvp, NULL, cd); /* Set the view */
+                if (!error) {
+                    *vpp = dvp;			/* Return current dir */
+                    VN_HOLD(*vpp);		/* One hold for the return vp */
+                }
+                break;
+            } else if (PN_STRCMP(MVFS_PN_CI_LOOKUP(pnp), nm, "VIEWPVT^") == 0) {
+                /* 
+                 * This name sets the "always cover" bit in the
+                 * view-tag.  In views with this bit set, all lookups
+                 * make loopback nodes to cover any non-atria dirs.
+                 */
+                *vpp = dvp;		/* Return view-tag */
+                VN_HOLD(*vpp);		/* One hold for the return vp */
+                VTOM(dvp)->mn_view.always_cover = 1;	/* Always cover */
+                error = 0;
+                break;
+            } else if (PN_STRCMP(MVFS_PN_CI_LOOKUP(pnp), nm, "VIEWSHR^") == 0) {
+                /* Undo view-private set above */
+                *vpp = dvp;
+                VN_HOLD(*vpp);
+                VTOM(dvp)->mn_view.always_cover = 0;
+                error = 0;
+                break;
+            }
+            /* Fall through */
+        case MFS_LOOPCLAS:	/* Pass on to real vnode */
+            ASSERT(MFS_REALVP(dvp));
 
-	    if (PN_STRCMP(MVFS_PN_CI_LOOKUP(pnp), nm, "ROOTDIR^") == 0) {	    /* Escape for real root */
-		*vpp = ROOTDIR;
-		VN_HOLD(*vpp);
+            if (PN_STRCMP(MVFS_PN_CI_LOOKUP(pnp), nm, "ROOTDIR^") == 0) {
+                /* Escape for real root */
+                *vpp = ROOTDIR;
+                VN_HOLD(*vpp);
                 MVFS_SAVE_ROOTDIR(ctxp);
-		error = 0;
-		break;
-	    }
-	    error = LOOKUP_COMPONENT(MFS_CLRVP(dvp), nm, &cvp, pnp, rdir,
-                                     MVFS_CD2CRED(cd), ctxp);
+                error = 0;
+                break;
+            }
+            error = LOOKUP_COMPONENT(MFS_CLRVP(dvp), nm, &cvp, pnp, rdir,
+                                     cd, ctxp);
             if (!error) {
-                error = mfs_makeloopnode(MFS_VIEW(dvp), cvp, vpp,
-                                         MVFS_CD2CRED(cd));
-                CVN_RELE(cvp);       /* Release lookup refcnt */
+                error = mfs_makeloopnode(MFS_VIEW(dvp), cvp, vpp, cd);
+                CVN_RELE(cvp, cd);       /* Release lookup refcnt */
             } else {
                 *vpp = NULL;
             }
-	    break;
-	case MFS_VIEWDIRCLAS:
-	    /* 
-	     * Another funky name.  As a 'view-tag' this name indicates
-	     * the view of the current working directory (if there
-	     * is one), or else the setview (if there is one) or
-	     * else it is ignored (and will return name not found).
-	     */
-	    if (PN_STRCMP(MVFS_PN_CI_LOOKUP(pnp), nm, "CWDVW^") == 0) {
+            break;
+        case MFS_VIEWDIRCLAS:
+            /* 
+             * Another funky name.  As a 'view-tag' this name indicates
+             * the view of the current working directory (if there
+             * is one), or else the setview (if there is one) or
+             * else it is ignored (and will return name not found).
+             */
+            if (PN_STRCMP(MVFS_PN_CI_LOOKUP(pnp), nm, "CWDVW^") == 0) {
                 VNODE_T *cdir = MDKI_GET_U_CDIR();
                 /* see comments about MVFS_NULL_U_CDIR_ERR in mvfs_mioctl.c */
                 if (cdir == NULL) {
                     error = MVFS_NULL_U_CDIR_ERR;
                     break;
                 }
-		*vpp = mfs_getview(cdir, MVFS_CD2CRED(cd), TRUE /* HOLD */);
+                *vpp = mfs_getview(cdir, MVFS_CD2CRED(cd), TRUE /* HOLD */);
                 MDKI_VNRELE_RCDIR(cdir);
-		if (*vpp != NULL) {	/* Vnode returned held */
-		    error = 0;
-		    break;
-		}
-	    }
-	    /* Following is a variant of the above, but only gets the "setview" state */
-	    if (PN_STRCMP(MVFS_PN_CI_LOOKUP(pnp), nm, "CURVIEW^") == 0) {
-		*vpp = mfs_getview(NULL, MVFS_CD2CRED(cd), TRUE /* HOLD */);
-		if (*vpp != NULL) {
-		    error = 0;
-		    break;
-		}
-	    }
-	    if (PN_STRCMP(MVFS_PN_CI_LOOKUP(pnp), nm, "CLRVIEW^") == 0) {
-		error = MVFS_SET_PROCVIEW((VNODE_T *)NULL, NULL); /* clear view */
-		if (!error) {
-		    *vpp = dvp;			/* Return current dir */
-		    VN_HOLD(*vpp);		/* One hold for the return vp */
-		}
-		break;
-	    }
-	    error = mfs_viewdirlookup(dvp, nm, vpp, MVFS_CD2CRED(cd),
-                                      pnp, flags);
-	    break;
-	case MFS_VOBRTCLAS: {
+                if (*vpp != NULL) {	/* Vnode returned held */
+                    error = 0;
+                    break;
+                }
+            }
+            /* Following is a variant of the above, but only gets the "setview" state */
+            if (PN_STRCMP(MVFS_PN_CI_LOOKUP(pnp), nm, "CURVIEW^") == 0) {
+                *vpp = mfs_getview(NULL, MVFS_CD2CRED(cd), TRUE /* HOLD */);
+                if (*vpp != NULL) {
+                    error = 0;
+                    break;
+                }
+            }
+            if (PN_STRCMP(MVFS_PN_CI_LOOKUP(pnp), nm, "CLRVIEW^") == 0) {
+                error = MVFS_SET_PROCVIEW((VNODE_T *)NULL, NULL, cd); /* clear view */
+                if (!error) {
+                    *vpp = dvp;			/* Return current dir */
+                    VN_HOLD(*vpp);		/* One hold for the return vp */
+                }
+                break;
+            }
+            error = mfs_viewdirlookup(dvp, nm, vpp, cd, pnp, flags);
+            break;
+        case MFS_VOBRTCLAS: {
 
-	    /* NOTES on lookup of ".." at a vob root:
-	       The algorithm for traversing up a mount point is
-	       funny at the VOB root because there is more than
-	       the 1 root floating around.  The algorithm for traversing
-	       up is to check if the dir object is a ROOT (via VROOT flag),
-	       and the name is "..".  If it is, then the lookuppn code
-	       will link back to the vnode covered by the v_vfsp of
-	       this object and lookup ".." in that object/FS.  To make
-	       matters worse, FSS systems make this check AFTER the
-	       (M)VOP_LOOKUP call, while real vnode systems make this
-	       check before the (M)VOP_LOOKUP call. */
+            /* NOTES on lookup of ".." at a vob root:
+               The algorithm for traversing up a mount point is
+               funny at the VOB root because there is more than
+               the 1 root floating around.  The algorithm for traversing
+               up is to check if the dir object is a ROOT (via VROOT flag),
+               and the name is "..".  If it is, then the lookuppn code
+               will link back to the vnode covered by the v_vfsp of
+               this object and lookup ".." in that object/FS.  To make
+               matters worse, FSS systems make this check AFTER the
+               (M)VOP_LOOKUP call, while real vnode systems make this
+               check before the (M)VOP_LOOKUP call. */
 
-	    /* Handle ".." at the root.  There are three cases:
-		1) Synonym for the root in an NT-style view.
-		   Just return the view vp as the vnode for ..
-		2) Synonym for root in a "loopback"-style view: use recursion to
-		   lookup the real ".." (traversing up the mount point)
-		   and make an appropriate loopback vnode so we don't
-		   lose the view.
-		3) The "real unbound root" (e.g. NULL view and pointed
-		   to by the mount point.  Just return ourselves.
-		   This would happen anyways if we did nothing, but
-		   this short cut saves us from possible stack overflow
-		   due to the recursion from (2) above.
-	     */
+            /* Handle ".." at the root.  There are three cases:
+                1) Synonym for the root in an NT-style view.
+                   Just return the view vp as the vnode for ..
+                2) Synonym for root in a "loopback"-style view: use recursion to
+                   lookup the real ".." (traversing up the mount point)
+                   and make an appropriate loopback vnode so we don't
+                   lose the view.
+                3) The "real unbound root" (e.g. NULL view and pointed
+                   to by the mount point.  Just return ourselves.
+                   This would happen anyways if we did nothing, but
+                   this short cut saves us from possible stack overflow
+                   due to the recursion from (2) above.
+             */
 
-	    if (mfs_hmcmp(nm, "..") == 0) {
-		if (PN_STRCMP(MVFS_PN_CI_LOOKUP(pnp), nm, "..") != 0) {	/* No HM ".." at root */
-		    *vpp = NULL;
-		    error = ENOENT;
-		    break;
-		}
+            if (mfs_hmcmp(nm, "..") == 0) {
+                if (PN_STRCMP(MVFS_PN_CI_LOOKUP(pnp), nm, "..") != 0) {	/* No HM ".." at root */
+                    *vpp = NULL;
+                    error = ENOENT;
+                    break;
+                }
 
-		/* Not "mount point" (no view) root. Make view-cover vnode for ".." */
+                /* Not "mount point" (no view) root. Make view-cover vnode for ".." */
 
-		vw = MFS_VIEW(dvp);	/* dvp holds vw, so no need for local hold */
-		if (vw != NULL) {
-		    /* 
-		     * Check for case (1) - an NT style view, and just
-		     * return the view-tag as ".." if so.
-		     */
-		    if (MFS_ISNTVIEW(VTOM(vw))) {
-			*vpp = vw;
-			VN_HOLD(*vpp);
-			error = 0;
-			break;
-		    }
+                vw = MFS_VIEW(dvp);	/* dvp holds vw, so no need for local hold */
+                if (vw != NULL) {
+                    /* 
+                     * Check for case (1) - an NT style view, and just
+                     * return the view-tag as ".." if so.
+                     */
+                    if (MFS_ISNTVIEW(VTOM(vw))) {
+                        *vpp = vw;
+                        VN_HOLD(*vpp);
+                        error = 0;
+                        break;
+                    }
 
-		    /* 
-		     * Must be case (2) - a loopback style view cover of
-		     * a vob root.  Lookup ".." through the mountpoint and
-		     * make a loopback vnode over that.
-		     */
-		    ASSERT(MFS_ISLOOPVIEW(VTOM(vw)));
+                    /* 
+                     * Must be case (2) - a loopback style view cover of
+                     * a vob root.  Lookup ".." through the mountpoint and
+                     * make a loopback vnode over that.
+                     */
+                    ASSERT(MFS_ISLOOPVIEW(VTOM(vw)));
 
-		    error = MVFS_ROOT(dvp->v_vfsp, &xvp);
+                    error = MVFS_ROOT(dvp->v_vfsp, &xvp);
                     if (!error) {
                         ASSERT(VTOM(xvp)->mn_hdr.viewvp == NULL);
                         MVFS_VP_TO_CVP(xvp, &xcvp);
                         error = LOOKUP_COMPONENT(xcvp, nm, &cvp, pnp, NULL, 
-                                                 MVFS_CD2CRED(cd), ctxp);
-                        CVN_RELE(xcvp);
-                        VN_RELE(xvp);
+                                                 cd, ctxp);
+                        CVN_RELE(xcvp, cd);
+                        ATRIA_VN_RELE(xvp, cd);
                     }
                     
                     if (!error) {
-                        error = mfs_makeloopnode(vw, cvp, vpp,
-                                                 MVFS_CD2CRED(cd));
-                        CVN_RELE(cvp);       /* Release lookup refcnt */
+                        error = mfs_makeloopnode(vw, cvp, vpp, cd);
+                        CVN_RELE(cvp, cd);       /* Release lookup refcnt */
                     } else {
                         *vpp = NULL;
                     }
-		    break;
-		} else {
-		    /* 
-		     * Naked VOB root without a view.
-		     * If the setview is a LOOPVIEW, then
-		     * we just return the vnode itself and the higher
-		     * layers of Unix pathname lookup will chase up
-		     * this mount point.  If the setview is an
-		     * NTVIEW, then we have to return that view-tag
-		     * as the result of the ".." lookup
-		     */
+                    break;
+                } else {
+                    /* 
+                     * Naked VOB root without a view.
+                     * If the setview is a LOOPVIEW, then
+                     * we just return the vnode itself and the higher
+                     * layers of Unix pathname lookup will chase up
+                     * this mount point.  If the setview is an
+                     * NTVIEW, then we have to return that view-tag
+                     * as the result of the ".." lookup
+                     */
 
-		    if ((*vpp = mfs_getview(NULL, MVFS_CD2CRED(cd), 
+                    if ((*vpp = mfs_getview(NULL, MVFS_CD2CRED(cd), 
                                             TRUE /* HOLD */)) != NULL) {
-		        if (MFS_ISNTVIEW(VTOM(*vpp))) {
-			    /* Hold already done by getview call */
-			    error = 0;
-			    break;
-			} else {
-			    /* Release getview refcount on loopback view */
-			    VN_RELE(*vpp);
-			    *vpp = NULL;
-			}
-		    }
+                        if (MFS_ISNTVIEW(VTOM(*vpp))) {
+                            /* Hold already done by getview call */
+                            error = 0;
+                            break;
+                        } else {
+                            /* Release getview refcount on loopback view */
+                            ATRIA_VN_RELE(*vpp, cd);
+                            *vpp = NULL;
+                        }
+                    }
 
-		    *vpp = dvp;
-		    VN_HOLD(*vpp);
-		    error = 0;
-		    break;
-		}
-	    }
+                    *vpp = dvp;
+                    VN_HOLD(*vpp);
+                    error = 0;
+                    break;
+                }
+            }
 
-	    /* Normal case - not ".." at a root of a vob. */
+            /* Normal case - not ".." at a root of a vob. */
 
-	    dvp = mfs_bindroot(dvp, cd, &error);
-	    if (error) {
-		/*
+            dvp = mfs_bindroot(dvp, cd, &error);
+            if (error) {
+                /*
                  * No view: return same vnode for .  (.. done above), 
-	         * or ENOENT for any other name (including .@@)
+                 * or ENOENT for any other name (including .@@)
                  */
-		if (error == ESRCH) {
-		    if (nm[0] == '.' && nm[1] == '\0') {
-			*vpp = dvp;
-			VN_HOLD(*vpp);
-			error = 0;
-		    } else {
-			error = ENOENT;
-		    }
-		}
-		break;
-	    }
-	    /* Fall through */
-	}
-	case MFS_VOBCLAS: {
+                if (error == ESRCH) {
+                    if (nm[0] == '.' && nm[1] == '\0') {
+                        *vpp = dvp;
+                        VN_HOLD(*vpp);
+                        error = 0;
+                    } else {
+                        error = ENOENT;
+                    }
+                }
+                break;
+            }
+            /* Fall through */
+        }
+        case MFS_VOBCLAS: {
 
-	    /* Find out if we have permission to be doing this.  Have
+            /* Find out if we have permission to be doing this.  Have
              * to check before going to cache because the dir may
              * have been chmod'ed.
              */
             error = mfs_accessv(dvp, VEXEC, 0, cd);
-	    if (error) break;
+            if (error)
+                break;
 
-    	    /* 
-	     * Before checking name cache, validate caches. 
-	     * Note that detecting stale name cache entries is
+            /* 
+             * Before checking name cache, validate caches. 
+             * Note that detecting stale name cache entries is
              * depends on the attribute cache timeout.
-	     */
-
-	    if (mfs_ac_timedout(VTOM(dvp), FALSE, cd)) {
+             */
+            if (mfs_ac_timedout(VTOM(dvp), FALSE, cd)) {
                 error = mfs_getattr(dvp, NULL, 0, cd);
-		if (error) break;
-		BUMPSTAT(mfs_acstat.ac_misses);
-		BUMPVSTAT(dvp,acstat.ac_misses);
-	    }
-	    (void) mfs_rebind_vpp((advp != dvp), &dvp, cd);
+                if (error) break;
+                BUMPSTAT(mfs_acstat.ac_misses);
+                BUMP_VACSTAT(dvp,acstat.ac_misses);
+            }
+            (void) mfs_rebind_vpp((advp != dvp), &dvp, cd);
 
-	    /* Note: dnclookup may MLOCK dvp in some paths! */
-    	    *vpp = mfs_dnclookup(dvp, nm, pnp, cd);
-    	    if (*vpp == NULL) {
+            /* Note: dnclookup may MLOCK dvp in some paths! */
+            *vpp = mfs_dnclookup(dvp, nm, pnp, cd);
+            if (*vpp == NULL) {
                 if (MVFS_PN_CI_LOOKUP(pnp)) {
                     error = EOPNOTSUPP;
                     goto noauditout;
                 }
-		error = mfs_clnt_lookup(dvp, nm, vpp, cd);
-	    } else {
-		fromcache = 1;
-	  	if (*vpp == MFS_DNC_ENOENTVP) {
-		    *vpp = NULL;
-		    error = ENOENT;
-		    mvfs_log(MFS_LOG_ENOENT,
-		        "lookup cached ENOENT: vw=%s vob=%s dbid=0x%x nm=%s\n",
-			mfs_vp2vw(dvp), mfs_vp2dev(dvp), 
-			mfs_vp2dbid(dvp), nm);
-		}
-	    }
-	    /* 
-             * If got a successful (non-cached) lookup, then the
-	     * result must be valid for itself.  Update the rebind
- 	     * cache for the target object to indicate this.
-	     */
-	    if (*vpp && !fromcache) {
-		mfs_rebind_self(*vpp, cd);
-	    }
+                error = mfs_clnt_lookup(dvp, nm, vpp, cd);
+            } else {
+                fromcache = 1;
+                if (*vpp == MFS_DNC_ENOENTVP) {
+                    *vpp = NULL;
+                    error = ENOENT;
+                    mvfs_log(MFS_LOG_ENOENT,
+                        "lookup cached ENOENT: vw=%s vob=%s dbid=0x%x nm=%s\n",
+                        mfs_vp2vw(dvp), mfs_vp2dev(dvp), 
+                        mfs_vp2dbid(dvp), nm);
+                }
+            }
+
             /* 
-	     * Check if we looked up ".." and found a vob root synonym.
+             * If got a successful (non-cached) lookup, then the
+             * result must be valid for itself.  Update the rebind
+             * cache for the target object to indicate this.
+             */
+            if (*vpp && !fromcache) {
+                mfs_rebind_self(*vpp, cd);
+            }
+
+            /* 
+             * Check if we looked up ".." and found a vob root synonym.
              *
              * For non-history-mode lookups, root synonyms are as follows:
              * dvp/.. -> root version (edbid = root edbid, vdbid = *) (lookup)
              * root version is a synonym -> return pseudo-root.
              *
-	     * For history-mode it is a lot more complex:
+             * For history-mode it is a lot more complex:
              * dvp/.. -> root version (edbid = root edbid, vdbid = *) (lookup)
              * NOT AT THE ROOT YET, return this vnode
              * root version/.. -> root branch (edbid=vdbid= branch dbid)
              * root branch/..  -> root element (edbid=vdbid= root dbid)
              * THIS IS THE ROOT SYNONYM we want to skip to the pseudo-root for
-   	     */
+             */
 	    if (!error && ((mfs_hmcmp(nm, ".") == 0) ||
                            (mfs_hmcmp(nm, "..") == 0)))
             {
-		rootdbid = V_TO_MMI(dvp)->mmi_root_edbid;
+                rootdbid = V_TO_MMI(dvp)->mmi_root_edbid;
+                if (MFS_ISROOTSYNONYM(*vpp, rootdbid)) {
+                    xvp = *vpp;		/* Save for audit */
 
-		if (MFS_ISROOTSYNONYM(*vpp, rootdbid)) {
-		    xvp = *vpp;		/* Save for audit */
-		    /* 
+                    /* 
                      * Make loopback node (if needed) to not lose view
-		     * extended naming at the VOB root. Use view of 
+                     * extended naming at the VOB root. Use view of 
                      * bound root vnode (could have warped from parent dir!)
-		     */
+                     */
                     MVFS_VP_TO_CVP(VFS_TO_MMI(xvp->v_vfsp)->mmi_rootvp, &cvp);
-		    error = mfs_makeloopnode(MFS_VIEW(xvp), cvp, vpp,
-                                             MVFS_CD2CRED(cd));
-                    CVN_RELE(cvp);
+                    error = mfs_makeloopnode(MFS_VIEW(xvp), cvp, vpp, cd);
+                    CVN_RELE(cvp, cd);
                     /*
                     ** Check if someone ended the view while we are in it.  This
                     ** is a lookup of ".." that got the vob root, so return
@@ -4620,60 +4609,58 @@ mvfs_lookup_ctx(
                         {
                             if (VTOM(vw)->mn_view.id == MFS_NULLVID) {
                                 error = ESTALE;
-                                VN_RELE(*vpp);	/* makeloopnode did VN_HOLD. */
+                                ATRIA_VN_RELE(*vpp, cd); /* mfs_makeloopnode() did a VN_HOLD */
                                 *vpp = NULL;
                             }
                         }
                     }
-		    /* 
-		     * Make sure bound root is in audit for both
-		     * parent and looked-up vnode. 
+                    /* 
+                     * Make sure bound root is in audit for both
+                     * parent and looked-up vnode. 
                      */
-		    if (!error) {
-	                MFS_AUDIT(MFS_AR_LOOKUP, dvp,
-                                  PN_GET_CASE_CORRECT_COMP(pnp, nm,
-                                                           &cc_comp_buf),
-                                  NULL, NULL, xvp, cd);
-			if (cc_comp_buf != NULL)
-			    STRFREE(cc_comp_buf);
+                    if (!error) {
+                        MFS_AUDIT(MFS_AR_LOOKUP,dvp,
+                          PN_GET_CASE_CORRECT_COMP(pnp, nm, &cc_comp_buf),
+                          NULL, NULL, xvp, cd);       
+                        if (cc_comp_buf != NULL)
+                            STRFREE(cc_comp_buf);
                     }
 
-		    /* Done with the "looked up" bound root.  Release */
+                    /* Done with the "looked up" bound root.  Release */
 
-		    VN_RELE(xvp);
-		    goto noauditout;
-		}
-	    }
-	    /* 
+                    ATRIA_VN_RELE(xvp, cd);
+                    goto noauditout;
+                }
+            }
+            /* 
              * Check with (possible) mdep routine for special file 
-	     * conditions (such as file in process of being deleted) 
-	     * that mean we should skip auditing this file.
+             * conditions (such as file in process of being deleted) 
+             * that mean we should skip auditing this file.
              */
-	    if ((*vpp) && MVFS_SKIP_AUDIT(*vpp)) { 
-    		MDB_VLOG((MFS_VLOOKUP,
-                          "mfs_lookup:  skipping audit of vp 0x%"KS_FMT_PTR_T
-                          "\n",
-                          *vpp));
-		goto noauditout;
-	    }
-	    break;
-	}
-	default:
-	    error = ENXIO;
-	    break;
+            if ((*vpp) && MVFS_SKIP_AUDIT(*vpp)) { 
+                MDB_VLOG((MFS_VLOOKUP,"mfs_lookup:  skipping audit of vp 0x%"KS_FMT_PTR_T"\n", 
+                        *vpp));
+                goto noauditout;
+            }
+            break;
+        }
+        default:
+            error = ENXIO;
+            break;
     }
 
 do_audit:
     if (!error) {
-	MFS_AUDIT(MFS_AR_LOOKUP, dvp, 
+        MFS_AUDIT(MFS_AR_LOOKUP, dvp, 
                   PN_GET_CASE_CORRECT_COMP(pnp, nm, &cc_comp_buf),
-		  NULL, NULL, *vpp, cd);
-	if (cc_comp_buf != NULL)
-	    STRFREE(cc_comp_buf);
+                  NULL, NULL, *vpp, cd);
+        if (cc_comp_buf != NULL)
+            STRFREE(cc_comp_buf);
     }
 
 noauditout:
-    if (dvp != advp) VN_RELE(dvp);  /* Release if allocated bound root vnode */
+    if (dvp != advp)
+        ATRIA_VN_RELE(dvp, cd); /* Release if allocated bound root vnode */
 
     /* 
      * *vpp may not always be a mvfs vnode, see ".." and ROOTDIR cases above 
@@ -4687,8 +4674,8 @@ noauditout:
               fromcache, error));
 
     BUMPSTAT(mfs_vnopcnt[MFS_VLOOKUP]);
-    MVFS_EXIT_FS(mth);
     ASSERT(error == 0 || *vpp == NULL);
+    MVFS_EXIT_FS(mth);
     return (error);
 }
 
@@ -4807,19 +4794,18 @@ mvfs_create_subr_with_cvp(
 #ifdef MVFS_NULL_NAME_ALLOWED
         if (VATTR_GET_TYPE(vap) == VDIR) {
 #else
-	/* Many file systems treat this as a reference to ".", as 
-	 * long as the create is not exclusive. */
+        /* Many file systems treat this as a reference to ".", as 
+         * long as the create is not exclusive. */
         if (VATTR_GET_TYPE(vap) == VDIR && !MDKI_ISVCEXCL(excl)) {
 #endif
-            mth = MVFS_GET_THREAD(cd);
             /* reference this directory & return it. */
             VN_HOLD(dvp);
             *vpp = dvp;
             error = 0;
             goto null_done;
         }
-	mvfs_log(MFS_LOG_ERR, "mfs_create: null name\n");
-	return(EEXIST);
+        mvfs_log(MFS_LOG_ERR, "mfs_create: null name\n");
+        return(EEXIST);
     }
 
     mth = MVFS_GET_THREAD(cd);
@@ -4828,19 +4814,18 @@ mvfs_create_subr_with_cvp(
 
     /* Switch op based on class */
     switch (VTOM(dvp)->mn_hdr.mclass) {
-	case MFS_VIEWCLAS:
-	case MFS_LOOPCLAS:	/* Pass on to real vnode */
-	    MFS_CHKSP(STK_VOPCREATE);
-	    error = MVOP_CREATE(MFS_REALVP(dvp), nm, vap, excl, mode, &loopvp,
+        case MFS_VIEWCLAS:
+        case MFS_LOOPCLAS:	/* Pass on to real vnode */
+            MFS_CHKSP(STK_VOPCREATE);
+            error = MVOP_CREATE(MFS_REALVP(dvp), nm, vap, excl, mode, &loopvp,
                                 cd, flag, ctxp);
-	    if (!error) {
-		error = mfs_makeloopnode(MFS_VIEW(dvp), loopvp, vpp,
-                                         MVFS_CD2CRED(cd));
-	    	CVN_RELE(loopvp);
-	    } else *vpp = NULL;
-	    break;
-	case MFS_NTVWCLAS:
-	case MFS_VIEWDIRCLAS:
+            if (!error) {
+                error = mfs_makeloopnode(MFS_VIEW(dvp), loopvp, vpp, cd);
+                CVN_RELE(loopvp, cd);
+            } else *vpp = NULL;
+            break;
+        case MFS_NTVWCLAS:
+        case MFS_VIEWDIRCLAS:
             /*
              * Pass in null pathname, rdir, and zero flags, as do other
              * "rogue" (non-VOP) callers of mfs_lookup().
@@ -4856,7 +4841,7 @@ mvfs_create_subr_with_cvp(
                  * directory.
                  */
                 if (MDKI_ISVCEXCL(excl) || VATTR_GET_TYPE(vap) != VDIR) {
-                    VN_RELE(*vpp);
+                    ATRIA_VN_RELE(*vpp, cd);
                     *vpp = NULL;
                     error = EEXIST;
                 }
@@ -4866,43 +4851,43 @@ mvfs_create_subr_with_cvp(
                  */
                 /* XXX can we get here if VCHR, VBLK, VFIFO? */
             } else
-	    	error = EROFS;
-	    break;
-	case MFS_VOBRTCLAS:
-	    dvp = mfs_bindroot(dvp, cd, &error);
-	    if (error == ESRCH) error = EROFS;   /* Null view to RO FS */
-	    if (error) break;
-	    /* Fall through */
-	case MFS_VOBCLAS: {
-	    if (VATTR_GET_TYPE(vap) == VCHR ||
-		 VATTR_GET_TYPE(vap) == VBLK || VATTR_GET_TYPE(vap) == VFIFO) {
-	    	error = ENXIO;
-	    	*vpp = NULL;
-	        break;
-	    }
+                error = EROFS;
+            break;
+        case MFS_VOBRTCLAS:
+            dvp = mfs_bindroot(dvp, cd, &error);
+            if (error == ESRCH) error = EROFS;   /* Null view to RO FS */
+            if (error) break;
+            /* Fall through */
+        case MFS_VOBCLAS: {
+            if (VATTR_GET_TYPE(vap) == VCHR ||
+                 VATTR_GET_TYPE(vap) == VBLK || VATTR_GET_TYPE(vap) == VFIFO) {
+                error = ENXIO;
+                *vpp = NULL;
+                break;
+            }
 
-	    (void) mfs_rebind_vpp((advp != dvp), &dvp, cd);
+            (void) mfs_rebind_vpp((advp != dvp), &dvp, cd);
 
 
           retry_lookup:
-	    error = mfs_lookup(dvp, nm, vpp, (struct pathname *)0, 0,
+            error = mfs_lookup(dvp, nm, vpp, (struct pathname *)0, 0,
                               (ROOTDIR_T *)0, cd);
-	    if (!error) {
+            if (!error) {
                 /* The lookup succeeded so we didn't create our file or the
                 ** cleartext, so the file_created and cvp initial values (0)
                 ** are correct.
                 */
-		if (MDKI_ISVCEXCL(excl)) {
-		    VN_RELE(*vpp);
-		    *vpp = NULL;
-		    error = EEXIST;
-		    break;
-		} else {
-		    /* Check access for open mode on existing file */
-		    error = mfs_accessv(*vpp, mode, 0, cd);
-		    /* Overwrite existing - check for O_TRUNC */
-		    if (!error && (mask & AT_SIZE) != 0 && 
-			VATTR_GET_SIZE(vap) == 0) {
+                if (MDKI_ISVCEXCL(excl)) {
+                    ATRIA_VN_RELE(*vpp, cd);
+                    *vpp = NULL;
+                    error = EEXIST;
+                    break;
+                } else {
+                    /* Check access for open mode on existing file */
+                    error = mfs_accessv(*vpp, mode, 0, cd);
+                    /* Overwrite existing - check for O_TRUNC */
+                    if (!error && (mask & AT_SIZE) != 0 && 
+                        VATTR_GET_SIZE(vap) == 0) {
 
                         /*
                          * Check to see if this is a 32 bit create call
@@ -4926,38 +4911,39 @@ mvfs_create_subr_with_cvp(
                             MVFS_FREE_VATTR_FIELDS(&va); 
                         }
      
-			/* Trash existing values in va struct since
-			   only a truncate is required and we don't
-			   want to get errors by having invalid fields
-			   set for the setattr.  The type/mode values
+                        /* Trash existing values in va struct since
+                           only a truncate is required and we don't
+                           want to get errors by having invalid fields
+                           set for the setattr.  The type/mode values
                            are no longer needed and must not be set
-	                   on the setattr call, and stack space in
-			   many implementations is too scarce to have
-			   a separate vattr struct in the stack here.
- 			 */
+                           on the setattr call, and stack space in
+                           many implementations is too scarce to have
+                           a separate vattr struct in the stack here.
+                         */
                         if (!error) {
-			    VATTR_NULL(vap);
-			    VATTR_SET_SIZE(vap, 0);
-			    VATTR_SET_MASK(vap, AT_SIZE);
-		            error = mvfs_changeattr(*vpp, vap, 0, cd, ctxp);
+                            VATTR_NULL(vap);
+                            VATTR_SET_SIZE(vap, 0);
+                            VATTR_SET_MASK(vap, AT_SIZE);
+                            error = mvfs_changeattr(*vpp, vap, 0, cd, ctxp);
                        }
-		    }
-		    if (!error)
-			/* need to fill in *vap with current stats */
-			error = mfs_getattr(*vpp, vap, 0, cd);
-		    if (error) {	/* Release vnode on error */
+                    }
+                    if (!error) {
+                        /* need to fill in *vap with current stats */
+                        error = mfs_getattr(*vpp, vap, 0, cd);
+                    }
+                    if (error) {
                         MVFS_FREE_VATTR_FIELDS(vap); /* and nt sids if copied */
-			VN_RELE(*vpp);
-			*vpp = NULL;
-		    }
-		    break;
-	        }
-  	    }
+                        ATRIA_VN_RELE(*vpp, cd);
+                        *vpp = NULL;
+                    }
+                    break;
+                }
+            }
 
             /* Our file doesn't exist, so get the view server to do what's
             ** necessary, including generating a cleartext pathname.
             */
-	    error = mfs_clnt_create(dvp, nm, vap, vpp, cd);
+            error = mfs_clnt_create(dvp, nm, vap, vpp, cd);
 
             if (error == EEXIST) {
                 /*
@@ -4968,74 +4954,74 @@ mvfs_create_subr_with_cvp(
                 goto retry_lookup;
             }
             
-	    if (error == EINTR) {
-		/* 
-	         * Don't know if view got rqst or not - try to at least
-	         * send a remove.  Otherwise the user is left fractured
-	         * on quits with a view version of the file, and
-	         * no cleartext (open will fail, truncate will fail etc.)
-	 	 */
-		xerr = mfs_clnt_remove(dvp, nm, MFS_USE_NULLBH, TRUE, cd);
-		if (xerr && xerr != ENOENT) {		 
-		    mvfs_logperr(MFS_LOG_ERR, xerr, 
-		        "create: failed rmv after cleartext error: vw=%s vob=%s dbid=0x%x nm=%s", 
-			    mfs_vp2vw(dvp), mfs_vp2dev(dvp), 
-			    mfs_vp2dbid(dvp), nm);
-		}
-		MFS_ATTRINVAL(dvp);
-	    }
-	    if (!error) {
+            if (error == EINTR) {
+                /* 
+                 * Don't know if view got rqst or not - try to at least
+                 * send a remove.  Otherwise the user is left fractured
+                 * on quits with a view version of the file, and
+                 * no cleartext (open will fail, truncate will fail etc.)
+                 */
+                xerr = mfs_clnt_remove(dvp, nm, MFS_USE_NULLBH, TRUE, cd);
+                if (xerr && xerr != ENOENT) {		 
+                    mvfs_logperr(MFS_LOG_ERR, xerr, 
+                        "create: failed rmv after cleartext error: vw=%s vob=%s dbid=0x%x nm=%s", 
+                            mfs_vp2vw(dvp), mfs_vp2dev(dvp), 
+                            mfs_vp2dbid(dvp), nm);
+                }
+                MFS_ATTRINVAL(dvp);
+            }
+            if (!error) {
                 /* We created our file and the cleartext path without error. */
                 file_created = 1;
 
-	        MLOCK(VTOM(*vpp));
-		/* Set sync_mtime to force update of mtime in
-		 * view to reflect the mtime of the underlying
-	 	 * cleartext.
-		 */
-		VTOM(*vpp)->mn_vob.sync_mtime = 1;
-	        /*
-	         * Set object already choided under audit to avoid
-	         * spurious choid right after create.  Create assigns
-  		 * a unique oid for the object.
-		 */
-		MFS_REMEMBER_CHOID_BH(mth, VTOM(*vpp));
-		/* 
-		 * Cleartext pname was returned/set by the clnt_create
-	         * so it is guaranteed to be right.
+                MLOCK(VTOM(*vpp));
+                /* Set sync_mtime to force update of mtime in
+                 * view to reflect the mtime of the underlying
+                 * cleartext.
+                 */
+                VTOM(*vpp)->mn_vob.sync_mtime = 1;
+                /*
+                 * Set object already choided under audit to avoid
+                 * spurious choid right after create.  Create assigns
+                 * a unique oid for the object.
+                 */
+                MFS_REMEMBER_CHOID_BH(mth, VTOM(*vpp));
+                /* 
+                 * Cleartext pname was returned/set by the clnt_create
+                 * so it is guaranteed to be right.
                  * If cvpp is non-NULL
                  * the cleartext vp is returned held (under the mnode lock)
                  * so even if someone else races us and changes the realvp
                  * (cleartext vp) in the mnode, this cleartext vp will be
                  * valid for our caller.
-		 */
-	        error = mfs_clear_create(*vpp, vap, cvpp, cd, flag); 
+                 */
+                error = mfs_clear_create(*vpp, vap, cvpp, cd, flag); 
 
-	        MUNLOCK(VTOM(*vpp));
-		if (error) {
-		    /* Cleartext create logged the error - cleanup */
-		    xerr = mfs_clnt_remove(dvp, nm, MFS_USE_NULLBH, TRUE, cd);
- 		    if (xerr && xerr != ENOENT) {
-			mvfs_logperr(MFS_LOG_ERR, xerr, 
-			    "create: failed rmv after cleartext error: vw=%s vob=%s dbid=0x%x nm=%s", 
-				mfs_vp2vw(dvp), mfs_vp2dev(dvp), 
-				mfs_vp2dbid(dvp), nm);
-		    }
-		    MFS_ATTRINVAL(dvp);
+                MUNLOCK(VTOM(*vpp));
+                if (error) {
+                    /* Cleartext create logged the error - cleanup */
+                    xerr = mfs_clnt_remove(dvp, nm, MFS_USE_NULLBH, TRUE, cd);
+                    if (xerr && xerr != ENOENT) {
+                        mvfs_logperr(MFS_LOG_ERR, xerr, 
+                            "create: failed rmv after cleartext error: vw=%s vob=%s dbid=0x%x nm=%s", 
+                                mfs_vp2vw(dvp), mfs_vp2dev(dvp), 
+                                mfs_vp2dbid(dvp), nm);
+                    }
+                    MFS_ATTRINVAL(dvp);
                     if (cvpp != NULL && *cvpp != NULL) {
                         /* Get rid of the cleartext vnode we created above. */
-                        CVN_RELE(*cvpp);
+                        CVN_RELE(*cvpp, cd);
                         *cvpp = NULL;
                     }
-		    VN_RELE(*vpp);   /* Dump new vnode */
-		    *vpp = NULL;     /* Null out worthless vnode */
-		}
-  	    }
-	    break;
-	}
-	default:
-	    error = ENXIO;
-	    break;
+                    ATRIA_VN_RELE(*vpp, cd);   /* Dump new vnode */
+                    *vpp = NULL;     /* Null out worthless vnode */
+                }
+            }
+            break;
+        }
+        default:
+            error = ENXIO;
+            break;
     }
 
     /* Do audit if no error and we actually created a file.
@@ -5043,19 +5029,22 @@ mvfs_create_subr_with_cvp(
      * previously.
      */
     if (!error && file_created) {
-	MFS_AUDIT(MFS_AR_CREATE, dvp, nm, NULL, NULL, *vpp, cd);
+        MFS_AUDIT(MFS_AR_CREATE, dvp, nm, NULL, NULL, *vpp, cd);
     }
+    if (dvp != advp)
+        ATRIA_VN_RELE(dvp, cd); /* Release if alloc bound root vnode */
 
-    if (dvp != advp) VN_RELE(dvp);   /* Release if alloc bound root vnode */
+    MVFS_EXIT_FS(mth);
 
   null_done:
     /*
      * *vpp may not always be a mvfs vnode (see mfs_makeloopnode()), so
      * check for ISMFS first before making the VTOM call 
      */
-    MDB_VLOG((MFS_VCREATE,"vp=%"KS_FMT_PTR_T" nm=%s, rvp=%"KS_FMT_PTR_T", rmnp=%"KS_FMT_PTR_T", err=%d\n",dvp,nm,*vpp,(*vpp ? (MFS_VPISMFS(*vpp)?VTOM(*vpp):0) : 0), error));
+    MDB_VLOG((MFS_VCREATE,
+              "vp=%"KS_FMT_PTR_T" nm=%s, rvp=%"KS_FMT_PTR_T", rmnp=%"KS_FMT_PTR_T", err=%d\n",
+              dvp, nm, *vpp, (*vpp ? (MFS_VPISMFS(*vpp) ? VTOM(*vpp) : 0) : 0), error));
     BUMPSTAT(mfs_vnopcnt[MFS_VCREATE]);
-    MVFS_EXIT_FS(mth);
     return (error);
 }
 
@@ -5118,7 +5107,7 @@ mvfs_silly_rename(
      * Must unlock around dir ops or can get deadlock
      * from locking child first, then parent.
      */
-		 
+                 
     MUNLOCK(mnp);
     MFS_INHAUDIT(mth);
     error = mvfs_rename_ctx(dvp, nm, dvp, tnm, cd, NULL);
@@ -5172,88 +5161,88 @@ mvfs_remove_ctx(
 
     if (!MVFS_ISVTYPE(dvp, VDIR)) return(ENOTDIR);
     if (nm == NULL || nm[0] == '\0') {
-	mvfs_log(MFS_LOG_ERR, "mfs_remove: null name\n");
-	return (EINVAL);
+        mvfs_log(MFS_LOG_ERR, "mfs_remove: null name\n");
+        return (EINVAL);
     }
 
     mth = MVFS_GET_THREAD(cd);
     /* Switch based on class of object */
 
     switch (VTOM(dvp)->mn_hdr.mclass) {
-	case MFS_VIEWCLAS:
-	case MFS_LOOPCLAS:	/* Pass on to real vnode */
-	    error = MVOP_REMOVE(MFS_REALVP(dvp), vp, nm, cd, ctxp);
-	    break;
-	case MFS_NTVWCLAS:
-	case MFS_VIEWDIRCLAS:
-	    error = EROFS;
-	    break;
-	case MFS_VOBRTCLAS:
-	    dvp = mfs_bindroot(dvp, cd, &error);
-	    if (error == ESRCH) error = EROFS;   /* Null view to ROFS */
-	    if (error) break;
-	    /* Fall through */
-	case MFS_VOBCLAS: {
+        case MFS_VIEWCLAS:
+        case MFS_LOOPCLAS:	/* Pass on to real vnode */
+            error = MVOP_REMOVE(MFS_REALVP(dvp), vp, nm, cd, ctxp);
+            break;
+        case MFS_NTVWCLAS:
+        case MFS_VIEWDIRCLAS:
+            error = EROFS;
+            break;
+        case MFS_VOBRTCLAS:
+            dvp = mfs_bindroot(dvp, cd, &error);
+            if (error == ESRCH) error = EROFS;   /* Null view to ROFS */
+            if (error) break;
+            /* Fall through */
+        case MFS_VOBCLAS: {
 
-	    (void) mfs_rebind_vpp((advp != dvp), &dvp, cd);
+            (void) mfs_rebind_vpp((advp != dvp), &dvp, cd);
 
             /* Lookup the name to get its vnode so we can
              * check on the refcnt.
              */
 
-	    if (vp == NULL) {
-		error = mfs_lookup(dvp, nm, &vp,
-				   (struct pathname *)0, 0,
-				   (ROOTDIR_T *)0, cd);
-		if (error) break;
-	    }
-	    ASSERT(MFS_ISVOB(VTOM(vp)));
+            if (vp == NULL) {
+                error = mfs_lookup(dvp, nm, &vp,
+                                   (struct pathname *)0, 0,
+                                   (ROOTDIR_T *)0, cd);
+                if (error) break;
+            }
+            ASSERT(MFS_ISVOB(VTOM(vp)));
 
-	    /* Don't allow remove to remove directories */
-	    if (MVFS_ISVTYPE(vp, VDIR)) {
-		error = EPERM;
-		if (avp == NULL)
-		    VN_RELE(vp);
-		break;
-	    }
+            /* Don't allow remove to remove directories */
+            if (MVFS_ISVTYPE(vp, VDIR)) {
+                error = EPERM;
+                if (avp == NULL)
+                    ATRIA_VN_RELE(vp, cd);
+                break;
+            }
 
-	    /*
-	     * Must sync modified pages.  After a real remove there may
+            /*
+             * Must sync modified pages.  After a real remove there may
              * be nowhere for them to go, and we don't want spurious
              * ESTALE for modified pages that can't be written out.
              * This also shouldn't be done with the MLOCK held which is
              * why it is done out here before we get the mnode lock.
-	     * Also, invalidate cached pages from the page cache -- they
-	     * may hold vnode references which would force us to rename
-	     * instead of removing.
+             * Also, invalidate cached pages from the page cache -- they
+             * may hold vnode references which would force us to rename
+             * instead of removing.
              */
 
             mnp = VTOM(vp);	 /* Info on object, not dir */
-	    (void) PVN_FLUSH(vp, MFS_PVN_FLUSH|MFS_PVN_INVAL, MVFS_CD2CRED(cd));
+            (void)PVN_FLUSH(vp, MFS_PVN_FLUSH|MFS_PVN_INVAL, cd);
 
-    	    MLOCK(mnp);	 /* Lock to avoid races on rmv state */
+            MLOCK(mnp);	 /* Lock to avoid races on rmv state */
 
-	    /*
-	     * Note that this sync must be done with the mnode locked,
-	     * to avoid races with other inactivators.  The alternative
-	     * would be to grab an extra reference to the realvp, but
-	     * just holding the mnode locked is cheaper.
-	     */
-	    if (mnp->mn_hdr.realvp) {
-		(void) PVN_FLUSH(MVFS_CVP_TO_VP(mnp->mn_hdr.realvp),
-                                 MFS_PVN_FLUSH, MVFS_CD2CRED(cd));
-	    }
+            /*
+             * Note that this sync must be done with the mnode locked,
+             * to avoid races with other inactivators.  The alternative
+             * would be to grab an extra reference to the realvp, but
+             * just holding the mnode locked is cheaper.
+             */
+            if (mnp->mn_hdr.realvp) {
+                (void)PVN_FLUSH(MVFS_CVP_TO_VP(mnp->mn_hdr.realvp),
+                                MFS_PVN_FLUSH, cd);
+            }
 
 #ifdef NFSV4_SHADOW_VNODE
             if (mnp->mn_hdr.realvp_master) {
-                (void) PVN_FLUSH(MVFS_CVP_TO_VP(mnp->mn_hdr.realvp_master),
-                                 MFS_PVN_FLUSH, MVFS_CD2CRED(cd));
+                (void)PVN_FLUSH(MVFS_CVP_TO_VP(mnp->mn_hdr.realvp_master),
+                                MFS_PVN_FLUSH, cd);
             }
 #endif
 
-	    /*
-	     * Fetch the audit information and release the
-	     * vnode before we actually remove it.  This solves
+            /*
+             * Fetch the audit information and release the
+             * vnode before we actually remove it.  This solves
              * two problems:
              *   (1) Avoids trying to get info (stat) an object that
              *       no longer exists in mfs_audit()
@@ -5263,71 +5252,71 @@ mvfs_remove_ctx(
              *	     incorrect results.
              */
 
-	    rmstatp = (struct mfs_auditrmstat *)
-				KMEM_ALLOC(sizeof(mfs_auditrmstat_t), KM_SLEEP);
-	    if (rmstatp == NULL) {
-	        error = ENOMEM;
-		MUNLOCK(mnp);
-		if (avp == NULL)
-		    VN_RELE(vp);
-	        break;
-	    }
+            rmstatp = (struct mfs_auditrmstat *)
+                                KMEM_ALLOC(sizeof(mfs_auditrmstat_t), KM_SLEEP);
+            if (rmstatp == NULL) {
+                error = ENOMEM;
+                MUNLOCK(mnp);
+                if (avp == NULL)
+                    ATRIA_VN_RELE(vp, cd);
+                break;
+            }
 
             mfs_init_rmstat(vp, rmstatp);
 
-    	    /* If still open references to this, just rename and
-       	       save info for delayed remove. Don't worry about
-	       race conditions with other processes, remove and
+            /* If still open references to this, just rename and
+               save info for delayed remove. Don't worry about
+               race conditions with other processes, remove and
                open simultaneously has undefined order even on a local
                system. 
-	       NT:  If delete on close flag is set do the remove now.
-	    */
+               NT:  If delete on close flag is set do the remove now.
+            */
 
-    	    if (MVFS_DEL_RENAME_NEEDED(vp, ctxp) &&
-    			(mnp->mn_vob.rmv_name == NULL) &&
-        		(!mnp->mn_vob.cleartext.delete_on_close)) {
+            if (MVFS_DEL_RENAME_NEEDED(vp, ctxp) &&
+                        (mnp->mn_vob.rmv_name == NULL) &&
+                        (!mnp->mn_vob.cleartext.delete_on_close)) {
 
                 error = mvfs_silly_rename(dvp, vp, nm, mth, cd);
                 if (error != 0) {
-		    MUNLOCK(mnp);
-		    if (avp == NULL)
-			VN_RELE(vp);
-		    break;
-		}
-    	    } else {			/* Real remove op */
-		/*
-		 * Now we can remove from the view
-		 */
-		MUNLOCK(mnp);
-        	error = mfs_clnt_remove(dvp, nm, MFS_USE_PROCBH, TRUE, cd);
-		MLOCK(mnp);
-        	if (!error) {
-    	            /* Can't trust attributes or cleartext after remove. */
-    	    	    MFS_ATTRINVAL(vp);
-		    mfs_clear_mark_name_purge(vp);
-		    /* Release cached slink info - may not be valid */
-		    if (mnp->mn_vob.slinktext) {
-			KMEM_FREE(mnp->mn_vob.slinktext, mnp->mn_vob.slinklen);
-			mnp->mn_vob.slinktext = NULL;
-			mnp->mn_vob.slinklen = 0;
-		    }
-        	}
-    	    }
-    	    MUNLOCK(mnp);
-	    /*
-	     * Release the vnode we have just removed if it was
-	     * not passed to us.
-	     *
+                    MUNLOCK(mnp);
+                    if (avp == NULL)
+                        ATRIA_VN_RELE(vp, cd);
+                    break;
+                }
+            } else {			/* Real remove op */
+                /*
+                 * Now we can remove from the view
+                 */
+                MUNLOCK(mnp);
+                error = mfs_clnt_remove(dvp, nm, MFS_USE_PROCBH, TRUE, cd);
+                MLOCK(mnp);
+                if (!error) {
+                    /* Can't trust attributes or cleartext after remove. */
+                    MFS_ATTRINVAL(vp);
+                    mfs_clear_mark_name_purge(vp);
+                    /* Release cached slink info - may not be valid */
+                    if (mnp->mn_vob.slinktext) {
+                        KMEM_FREE(mnp->mn_vob.slinktext, mnp->mn_vob.slinklen);
+                        mnp->mn_vob.slinktext = NULL;
+                        mnp->mn_vob.slinklen = 0;
+                    }
+                }
+            }
+            MUNLOCK(mnp);
+            /*
+             * Release the vnode we have just removed if it was
+             * not passed to us.
+             *
              * Unless someone has just started using this object
              * by another name, it will be inactived.
-	     */
+             */
             if (avp == NULL)
-		VN_RELE(vp);	    /* Done with vnode of object */
-	    break;
-	}
-	default:
-	    error = ENXIO;
-	    break;
+                ATRIA_VN_RELE(vp, cd);	    /* Done with vnode of object */
+            break;
+        }
+        default:
+            error = ENXIO;
+            break;
     }
 
     /* 
@@ -5340,8 +5329,9 @@ mvfs_remove_ctx(
     }
 
     if (rmstatp) 		    /* Done with saved info for audit */
-	KMEM_FREE(rmstatp, sizeof(*rmstatp));
-    if (dvp != advp) VN_RELE(dvp);  /* Release if allocated bound root vnode */
+        KMEM_FREE(rmstatp, sizeof(*rmstatp));
+    if (dvp != advp)
+        ATRIA_VN_RELE(dvp, cd); /* Release if allocated bound root vnode */
 
     MDB_VLOG((MFS_VREMOVE,"vp=%"KS_FMT_PTR_T" name=%s, err=%d\n",dvp,nm,error));
     BUMPSTAT(mfs_vnopcnt[MFS_VREMOVE]);
@@ -5373,7 +5363,7 @@ mvfs_link_ctx(
      * are both on the same mountpoint.
      */
     if (!MVFS_IS_SAME_VFS(vp, tdvp)) {
-	return(EXDEV);
+        return(EXDEV);
     }
     if ((tdvp->v_vfsp->vfs_flag & VFS_RDONLY) != 0) {
         return(EROFS);
@@ -5384,64 +5374,65 @@ mvfs_link_ctx(
     /* Verify vp is not a dir */
 
     if (MVFS_ISVTYPE(vp, VDIR)) {
-	return(EISDIR);
+        return(EISDIR);
     }
     if (tnm == NULL || tnm[0] == '\0') {
-	mvfs_log(MFS_LOG_ERR, "mfs_link: null name\n");
-	return (EINVAL);
+        mvfs_log(MFS_LOG_ERR, "mfs_link: null name\n");
+        return (EINVAL);
     }
 
     MVFS_ENTER_FS(mth);
     /* Switch based on class of ***DIR*** object */
 
     switch (VTOM(tdvp)->mn_hdr.mclass) {
-	case MFS_SDEVCLAS:
-	    error = EROFS;	/* Not allowed */
-	    break;
-	case MFS_VIEWCLAS:
-	case MFS_LOOPCLAS:	/* Pass on to real vnode */
-	    /* I can't always trust the FS to check for xdev, so I do
-	       it here.  The object must have a real vp, and both real
-	       vp's must be on the same dev. */
+        case MFS_SDEVCLAS:
+            error = EROFS;	/* Not allowed */
+            break;
+        case MFS_VIEWCLAS:
+        case MFS_LOOPCLAS:	/* Pass on to real vnode */
+            /* I can't always trust the FS to check for xdev, so I do
+               it here.  The object must have a real vp, and both real
+               vp's must be on the same dev. */
 
-	    if (!MFS_REALVP(vp) ||
-		!MVFS_IS_SAME_VFS(MFS_REALVP(vp), MFS_REALVP(tdvp))) {
-		error = EXDEV;
-		break;
-	    }
-	    error = MVOP_LINK(MFS_REALVP(tdvp), MFS_REALVP(vp), tnm, cd, ctxp);
-	    break;
-	case MFS_NTVWCLAS:
-	case MFS_VIEWDIRCLAS:
-	    error = EROFS;
-	    break;
-	case MFS_VOBRTCLAS:
-	    tdvp = mfs_bindroot(tdvp, cd, &error);
-	    if (error == ESRCH) error = EROFS;   /* Null view to RO FS */
-	    if (error) break;
-	    /* Fall through */
-	case MFS_VOBCLAS: {
-	    /* Verify same view AFTER bindroot */
-	    if (MFS_VIEW(vp) != MFS_VIEW(tdvp)) {
-		error = EXDEV;
-		break;
-	    }
-	    (void) mfs_rebind_vpp((atdvp != tdvp), &tdvp, cd);
-	    error = mfs_clnt_link(vp, tdvp, tnm, cd);
-	    break;
+            if (!MFS_REALVP(vp) ||
+                !MVFS_IS_SAME_VFS(MFS_REALVP(vp), MFS_REALVP(tdvp))) {
+                error = EXDEV;
+                break;
+            }
+            error = MVOP_LINK(MFS_REALVP(tdvp), MFS_REALVP(vp), tnm, cd, ctxp);
+            break;
+        case MFS_NTVWCLAS:
+        case MFS_VIEWDIRCLAS:
+            error = EROFS;
+            break;
+        case MFS_VOBRTCLAS:
+            tdvp = mfs_bindroot(tdvp, cd, &error);
+            if (error == ESRCH) error = EROFS;   /* Null view to RO FS */
+            if (error) break;
+            /* Fall through */
+        case MFS_VOBCLAS: {
+            /* Verify same view AFTER bindroot */
+            if (MFS_VIEW(vp) != MFS_VIEW(tdvp)) {
+                error = EXDEV;
+                break;
+            }
+            (void) mfs_rebind_vpp((atdvp != tdvp), &tdvp, cd);
+            error = mfs_clnt_link(vp, tdvp, tnm, cd);
+            break;
         }
-	default:
-	    error = ENXIO;
-	    break;
+        default:
+            error = ENXIO;
+            break;
     }
 
     /* Do audit if no error */
 
     if (!error) {
-	MFS_AUDIT(MFS_AR_LINK, tdvp, tnm, NULL, NULL, vp, cd);
+        MFS_AUDIT(MFS_AR_LINK, tdvp, tnm, NULL, NULL, vp, cd);
     }
 
-    if (tdvp != atdvp) VN_RELE(tdvp); /* Release if allocated bnd root vnode */
+    if (tdvp != atdvp)
+        ATRIA_VN_RELE(tdvp, cd); /* Release if allocated bnd root vnode */
 
     MDB_VLOG((MFS_VLINK,"vp=%"KS_FMT_PTR_T" tdvp=%"KS_FMT_PTR_T", nm=%s, err=%d\n",vp,tdvp,tnm, error));
     BUMPSTAT(mfs_vnopcnt[MFS_VLINK]);
@@ -5509,54 +5500,54 @@ mvfs_rename_ctx(
     /* Disallow hames we know are no good */
 
     if (mfs_hmcmp(onm, ".") == 0 || mfs_hmcmp(onm, "..") == 0 ||
-	mfs_hmcmp(tnm, ".") == 0 || mfs_hmcmp(tnm, "..") == 0) {
-	error = EINVAL;
+        mfs_hmcmp(tnm, ".") == 0 || mfs_hmcmp(tnm, "..") == 0) {
+        error = EINVAL;
         goto errout;
     }
 
     /* Switch based on class of object */
 
     switch (VTOM(odvp)->mn_hdr.mclass) {
-	case MFS_SDEVCLAS:
-	    error = ENOTDIR;
-	    break;
-	case MFS_VIEWCLAS:
-	case MFS_LOOPCLAS:	/* Pass on to real vnode */
-	    error = MVOP_RENAME(MFS_REALVP(odvp),onm,MFS_REALVP(tdvp),tnm,
+        case MFS_SDEVCLAS:
+            error = ENOTDIR;
+            break;
+        case MFS_VIEWCLAS:
+        case MFS_LOOPCLAS:	/* Pass on to real vnode */
+            error = MVOP_RENAME(MFS_REALVP(odvp),onm,MFS_REALVP(tdvp),tnm,
                                 cd,ctxp);
-	    break;
-	case MFS_NTVWCLAS:
-	case MFS_VIEWDIRCLAS:
-	    error = EROFS;
-	    break;
-	case MFS_VOBRTCLAS:
-	    odvp = mfs_bindroot(odvp, cd, &error);
-	    if (error == ESRCH) error = EROFS;   /* Null view -> RO FS */
-	    if (error) break;
-	    /* Fall through */
-	case MFS_VOBCLAS: {
+            break;
+        case MFS_NTVWCLAS:
+        case MFS_VIEWDIRCLAS:
+            error = EROFS;
+            break;
+        case MFS_VOBRTCLAS:
+            odvp = mfs_bindroot(odvp, cd, &error);
+            if (error == ESRCH) error = EROFS;   /* Null view -> RO FS */
+            if (error) break;
+            /* Fall through */
+        case MFS_VOBCLAS: {
 
-	    /* Must bind to dir if applicable */
+            /* Must bind to dir if applicable */
 
-	    if (MFS_ISVOBRT(VTOM(tdvp))) {
-		tdvp = mfs_bindroot(tdvp, cd, &error);
-		if (error == ESRCH) error = EROFS;    /* Null view -> RO FS */
-		if (error) break;
-	    }
+            if (MFS_ISVOBRT(VTOM(tdvp))) {
+                tdvp = mfs_bindroot(tdvp, cd, &error);
+                if (error == ESRCH) error = EROFS;    /* Null view -> RO FS */
+                if (error) break;
+            }
 
-	    /* Must make sure that the two dirs are the same view */
-	
-	    if (MFS_VIEW(odvp) != MFS_VIEW(tdvp)) {
-		error = EXDEV;
-		break;
-	    }
+            /* Must make sure that the two dirs are the same view */
+        
+            if (MFS_VIEW(odvp) != MFS_VIEW(tdvp)) {
+                error = EXDEV;
+                break;
+            }
 
-	    /* Must do out of date cwd checks on both dirs */
+            /* Must do out of date cwd checks on both dirs */
 
-	    (void) mfs_rebind_vpp((aodvp != odvp), &odvp, cd);
+            (void) mfs_rebind_vpp((aodvp != odvp), &odvp, cd);
             (void) mfs_rebind_vpp((atdvp != tdvp), &tdvp, cd);
 
-	    /* 
+            /* 
              * This is a real pain, but we have to SYNC the attributes
              * on the target vnode before the rename, since rename can
              * end up deleting the target object (rename over existing),
@@ -5570,10 +5561,10 @@ mvfs_rename_ctx(
             error = mfs_lookup(tdvp, tnm, &vp, (struct pathname *)0, 0,
                                (ROOTDIR_T *)0, cd);
             if (error == 0) {
-	        ASSERT(MFS_ISVOB(VTOM(vp)));
-		MLOCK(VTOM(vp));
-		mvfs_sync_attr(VTOM(vp), NULL, MFS_USE_PROCBH, 0, cd);
-		mfs_clear_mark_purge(vp);
+                ASSERT(MFS_ISVOB(VTOM(vp)));
+                MLOCK(VTOM(vp));
+                mvfs_sync_attr(VTOM(vp), NULL, MFS_USE_PROCBH, 0, cd);
+                mfs_clear_mark_purge(vp);
                 /*
                  * By pure happenstance, the tests for link count > 1
                  * (inside the macro definitions of MVFS_RENAME_RENAME_NEEDED())
@@ -5629,23 +5620,23 @@ mvfs_rename_ctx(
                               " vcount %d)\n", tnm,
                               VTOM(vp)->mn_vob.attr.fstat.nlink, V_COUNT(vp)));
                 }
-		MUNLOCK(VTOM(vp));
-		VN_RELE(vp);
-	    } else {
+                MUNLOCK(VTOM(vp));
+                ATRIA_VN_RELE(vp, cd);
+            } else {
                 /* if target doesn't exist, continue with rename */
                 if (error == ENOENT) {
                     error = 0;
                 }
             }
-	    /* Now we can do the rename */
+            /* Now we can do the rename */
 
             if (error == 0)
                 error = mfs_clnt_rename(odvp, onm, tdvp, tnm, cd);
-	    break;
+            break;
         }
-	default:
-	    error = ENXIO;
-	    break;
+        default:
+            error = ENXIO;
+            break;
     }
 
     /* Do audit if no error
@@ -5653,14 +5644,17 @@ mvfs_rename_ctx(
        Perhaps 2 recs, 1 for unlink, and 1 for link. */
 
     if (!error) {
-	MFS_AUDIT(MFS_AR_RENAME, odvp, onm, tdvp, tnm, NULL, cd);
+        MFS_AUDIT(MFS_AR_RENAME, odvp, onm, tdvp, tnm, NULL, cd);
     }
 
-    if (odvp != aodvp) VN_RELE(odvp);   /* Release if allocated vnode */
-    if (tdvp != atdvp) VN_RELE(tdvp);   /* Release if allocated vnode */
+    if (odvp != aodvp)
+        ATRIA_VN_RELE(odvp, cd); /* Release if allocated vnode */
+    if (tdvp != atdvp)
+        ATRIA_VN_RELE(tdvp, cd); /* Release if allocated vnode */
 
 errout:
-    MDB_VLOG((MFS_VRENAME,"vp=%"KS_FMT_PTR_T" %s to %"KS_FMT_PTR_T" %s, err=%d\n",odvp,onm,tdvp,tnm,error));
+    MDB_VLOG((MFS_VRENAME,"vp=%"KS_FMT_PTR_T" %s to %"KS_FMT_PTR_T" %s, err=%d\n",
+              odvp, onm, tdvp, tnm,error));
     BUMPSTAT(mfs_vnopcnt[MFS_VRENAME]);
     MVFS_EXIT_FS(mth);
     return (error);
@@ -5700,60 +5694,60 @@ mvfs_mkdir_ctx(
 
     *vpp = NULL;
     if (!MVFS_ISVTYPE(dvp, VDIR)) {
-	return(ENOTDIR);
+        return(ENOTDIR);
     }
     if (nm == NULL || nm[0] == '\0') {
-	mvfs_log(MFS_LOG_ERR, "mvfs_mkdir: null name\n");
-	return (EINVAL);
+        mvfs_log(MFS_LOG_ERR, "mvfs_mkdir: null name\n");
+        return (EINVAL);
     }
 
     MVFS_ENTER_FS(mth);
     /* Switch based on class of object */
 
     switch (VTOM(dvp)->mn_hdr.mclass) {
-	case MFS_VIEWCLAS:
-	case MFS_LOOPCLAS:	/* Pass on to real vnode */
-	    error = MVOP_MKDIR(MFS_REALVP(dvp), nm, va, &cvp, cd, ctxp);
-	    if (!error) {
-		error = mfs_makeloopnode(MFS_VIEW(dvp), cvp, vpp,
-                                         MVFS_CD2CRED(cd));
-		CVN_RELE(cvp);
-	    } else *vpp = NULL;
-	    break;
-	case MFS_NTVWCLAS:
-	case MFS_VIEWDIRCLAS:
-	    error = EROFS;
-	    break;
-	case MFS_VOBRTCLAS:
-	    dvp = mfs_bindroot(dvp, cd, &error);
-	    if (error == ESRCH) error = EROFS;	/* Null view returns EROFS */
-	    if (error) break;
-	    /* Fall through */
-	case MFS_VOBCLAS:
-	    (void) mfs_rebind_vpp((advp != dvp), &dvp, cd);
-	    /*
-	     * Screen out bogus names "." and ".."; these must return EEXIST
-	     */
-	    if (nm[0] == '.' && (nm[1] == '\0' || 
-				 (nm[1] == '.' && nm[2] == '\0'))) {
-		error = EEXIST;
-		break;
-	    }
-	    error = mfs_clnt_mkdir(dvp, nm, va, vpp, cd);
-	    if (!error) {	
-		mfs_rebind_self(*vpp, cd);  /* New dir is rebinds to self */
-	    }
-	    break;
-	default:
-	    error = ENXIO;
-	    break;
+        case MFS_VIEWCLAS:
+        case MFS_LOOPCLAS:	/* Pass on to real vnode */
+            error = MVOP_MKDIR(MFS_REALVP(dvp), nm, va, &cvp, cd, ctxp);
+            if (!error) {
+                error = mfs_makeloopnode(MFS_VIEW(dvp), cvp, vpp, cd);
+                CVN_RELE(cvp, cd);
+            } else *vpp = NULL;
+            break;
+        case MFS_NTVWCLAS:
+        case MFS_VIEWDIRCLAS:
+            error = EROFS;
+            break;
+        case MFS_VOBRTCLAS:
+            dvp = mfs_bindroot(dvp, cd, &error);
+            if (error == ESRCH) error = EROFS;	/* Null view returns EROFS */
+            if (error) break;
+            /* Fall through */
+        case MFS_VOBCLAS:
+            (void) mfs_rebind_vpp((advp != dvp), &dvp, cd);
+            /*
+             * Screen out bogus names "." and ".."; these must return EEXIST
+             */
+            if (nm[0] == '.' && (nm[1] == '\0' || 
+                                 (nm[1] == '.' && nm[2] == '\0'))) {
+                error = EEXIST;
+                break;
+            }
+            error = mfs_clnt_mkdir(dvp, nm, va, vpp, cd);
+            if (!error) {	
+                mfs_rebind_self(*vpp, cd);  /* New dir is rebinds to self */
+            }
+            break;
+        default:
+            error = ENXIO;
+            break;
     }
 
     if (!error) {
-	MFS_AUDIT(MFS_AR_CREATE, dvp, nm, NULL, NULL, *vpp, cd);
+        MFS_AUDIT(MFS_AR_CREATE, dvp, nm, NULL, NULL, *vpp, cd);
     }
 
-    if (dvp != advp) VN_RELE(dvp);   /* Release if allocated bound root vnode */
+    if (dvp != advp)
+        ATRIA_VN_RELE(dvp, cd); /* Release if allocated bound root vnode */
 
     /*
      * *vpp may not always be a mvfs vnode (see mfs_makeloopnode()), so
@@ -5800,8 +5794,8 @@ mvfs_rmdir_ctx(
 
     if (!MVFS_ISVTYPE(dvp, VDIR)) return(ENOTDIR);
     if (nm == NULL || nm[0] == '\0') {
-	mvfs_log(MFS_LOG_ERR, "mfs_rmdir: null name\n");
-	return (EINVAL);
+        mvfs_log(MFS_LOG_ERR, "mfs_rmdir: null name\n");
+        return (EINVAL);
     }
     if (nm[0] == '.' && nm[1] == '\0') {
         /* can't remove ., you idiot.
@@ -5817,21 +5811,21 @@ mvfs_rmdir_ctx(
     /* Switch based on class of object */
 
     switch (VTOM(dvp)->mn_hdr.mclass) {
-	case MFS_VIEWCLAS:
-	case MFS_LOOPCLAS:	/* Pass on to real vnode */
-	    error = MVOP_RMDIR(MFS_REALVP(dvp), nm, cdir, cd, ctxp);
-	    break;
-	case MFS_NTVWCLAS:
-	case MFS_VIEWDIRCLAS:
-	    error = EROFS;
-	    break;
-	case MFS_VOBRTCLAS:
-	    dvp = mfs_bindroot(dvp, cd, &error);
-	    if (error == ESRCH) error = EROFS;	/* Null view returns EROFS */
-	    if (error) break;
-	    /* Fall through */
-	case MFS_VOBCLAS: {
-	    (void) mfs_rebind_vpp((advp != dvp), &dvp, cd);
+        case MFS_VIEWCLAS:
+        case MFS_LOOPCLAS:	/* Pass on to real vnode */
+            error = MVOP_RMDIR(MFS_REALVP(dvp), nm, cdir, cd, ctxp);
+            break;
+        case MFS_NTVWCLAS:
+        case MFS_VIEWDIRCLAS:
+            error = EROFS;
+            break;
+        case MFS_VOBRTCLAS:
+            dvp = mfs_bindroot(dvp, cd, &error);
+            if (error == ESRCH) error = EROFS;	/* Null view returns EROFS */
+            if (error) break;
+            /* Fall through */
+        case MFS_VOBCLAS: {
+            (void) mfs_rebind_vpp((advp != dvp), &dvp, cd);
 
             /* 
              * Lookup the name to get its stat information 
@@ -5841,13 +5835,13 @@ mvfs_rmdir_ctx(
             error = mfs_lookup(dvp, nm, &vp, (struct pathname *)0, 0,
                                (ROOTDIR_T *)0, cd);
             if (error) break;
-	    ASSERT(MFS_ISVOB(VTOM(vp)));
+            ASSERT(MFS_ISVOB(VTOM(vp)));
 
-    	    MLOCK(VTOM(vp));	 /* Lock to avoid races on rmv state */
+            MLOCK(VTOM(vp));	 /* Lock to avoid races on rmv state */
 
-	    /*
-	     * Fetch the audit information and release the
-	     * vnode before we actually remove it.  This solves
+            /*
+             * Fetch the audit information and release the
+             * vnode before we actually remove it.  This solves
              * two problems:
              *   (1) Avoids trying to get info (stat) an object that
              *       no longer exists in mfs_audit()
@@ -5857,30 +5851,30 @@ mvfs_rmdir_ctx(
              *	     incorrect results.
              */
 
-	    rmstatp = (struct mfs_auditrmstat *)
-				KMEM_ALLOC(sizeof(mfs_auditrmstat_t), KM_SLEEP);
-	    if (rmstatp == NULL) {
-	        error = ENOMEM;
-		MUNLOCK(VTOM(vp));
-		VN_RELE(vp);
-	        break;
-	    }
+            rmstatp = (struct mfs_auditrmstat *)
+                                KMEM_ALLOC(sizeof(mfs_auditrmstat_t), KM_SLEEP);
+            if (rmstatp == NULL) {
+                error = ENOMEM;
+                MUNLOCK(VTOM(vp));
+                ATRIA_VN_RELE(vp, cd);
+                break;
+            }
 
-	    mfs_init_rmstat(vp, rmstatp);
+            mfs_init_rmstat(vp, rmstatp);
 
-	    MUNLOCK(VTOM(vp));
-	    VN_RELE(vp);	/* release hold count from lookup */
+            MUNLOCK(VTOM(vp));
+            ATRIA_VN_RELE(vp, cd);	/* release hold count from lookup */
 
-	    /*
-	     * Now we actually remove the dir.
-	     */
+            /*
+             * Now we actually remove the dir.
+             */
 
-	    error = mfs_clnt_rmdir(dvp, nm, cd);
-	    break;
-	}
-	default:
-	    error = ENXIO;
-	    break;
+            error = mfs_clnt_rmdir(dvp, nm, cd);
+            break;
+        }
+        default:
+            error = ENXIO;
+            break;
     }
 
     /* 
@@ -5893,9 +5887,10 @@ mvfs_rmdir_ctx(
     }
 
     if (rmstatp) 		    /* Done with saved info for audit */
-	KMEM_FREE(rmstatp, sizeof(*rmstatp));
-	
-    if (dvp != advp) VN_RELE(dvp);   /* Release if allocated bound root vnode */
+        KMEM_FREE(rmstatp, sizeof(*rmstatp));
+        
+    if (dvp != advp)
+        ATRIA_VN_RELE(dvp, cd); /* Release if allocated bound root vnode */
 
     MDB_VLOG((MFS_VRMDIR,"vp=%"KS_FMT_PTR_T" name=%s, err=%d\n",dvp,nm,error));
     BUMPSTAT(mfs_vnopcnt[MFS_VRMDIR]);
@@ -5937,50 +5932,51 @@ mvfs_symlink_ctx(
     ASSERT(VTOM(dvp)->mn_hdr.vp);
     if (!MVFS_ISVTYPE(dvp,VDIR)) return(ENOTDIR);
     if (lnm == NULL || lnm[0] == '\0' ||
-	tnm == NULL || tnm[0] == '\0') {
-	mvfs_log(MFS_LOG_ERR, "mfs_symlink: null name\n");
-	return (EINVAL);
+        tnm == NULL || tnm[0] == '\0') {
+        mvfs_log(MFS_LOG_ERR, "mfs_symlink: null name\n");
+        return (EINVAL);
     }
 
     MVFS_ENTER_FS(mth);
     /* Switch based on class of object */
 
     switch (VTOM(dvp)->mn_hdr.mclass) {
-	case MFS_VIEWCLAS:
-	case MFS_LOOPCLAS:	/* Pass on to real vnode */
-	    error = MVOP_SYMLINK(MFS_REALVP(dvp), lnm, tva, tnm, &vp, cd, ctxp);
-	    break;
-	case MFS_NTVWCLAS:
-	case MFS_VIEWDIRCLAS:
-	    error = EROFS;	/* illegal */
-	    break;
-	case MFS_VOBRTCLAS:
-	    dvp = mfs_bindroot(dvp, cd, &error);
-	    if (error == ESRCH) error = EROFS;	/* Null view returns EROFS */
-	    if (error) break;
-	    /* Fall through */
-	case MFS_VOBCLAS: {
-	    (void) mfs_rebind_vpp((advp != dvp), &dvp, cd);
-	    error = mfs_clnt_symlink(dvp, lnm, tva, tnm, &vp, cd);
-	    break;
+        case MFS_VIEWCLAS:
+        case MFS_LOOPCLAS:	/* Pass on to real vnode */
+            error = MVOP_SYMLINK(MFS_REALVP(dvp), lnm, tva, tnm, &vp, cd, ctxp);
+            break;
+        case MFS_NTVWCLAS:
+        case MFS_VIEWDIRCLAS:
+            error = EROFS;	/* illegal */
+            break;
+        case MFS_VOBRTCLAS:
+            dvp = mfs_bindroot(dvp, cd, &error);
+            if (error == ESRCH) error = EROFS;	/* Null view returns EROFS */
+            if (error) break;
+            /* Fall through */
+        case MFS_VOBCLAS: {
+            (void) mfs_rebind_vpp((advp != dvp), &dvp, cd);
+            error = mfs_clnt_symlink(dvp, lnm, tva, tnm, &vp, cd);
+            break;
         }
-	default:
-	    error = ENXIO;
-	    break;
+        default:
+            error = ENXIO;
+            break;
     }
 
     if (!error && vp) {
-	MFS_AUDIT(MFS_AR_SYMLINK, dvp, lnm, NULL, NULL, vp, cd);
-	MFS_AUDIT(MFS_AR_RDLINK, NULL, tnm, NULL, NULL, vp, cd);
+        MFS_AUDIT(MFS_AR_SYMLINK, dvp, lnm, NULL, NULL, vp, cd);
+        MFS_AUDIT(MFS_AR_RDLINK, NULL, tnm, NULL, NULL, vp, cd);
     }
 
-    if (dvp != advp) VN_RELE(dvp);   /* Release if allocated bound root vnode */
+    if (dvp != advp)
+        ATRIA_VN_RELE(dvp, cd); /* Release if allocated bound root vnode */
 
     if (vpp != NULL) {
         /* *vpp is granted our reference (if vp not null) */
         *vpp = vp;
     } else if (vp != NULL) {
-        VN_RELE(vp);     /* Release symlink vnode if created */
+        ATRIA_VN_RELE(vp, cd);     /* Release symlink vnode if created */
     }
 
     MDB_VLOG((MFS_VSYMLINK,"vp=%"KS_FMT_PTR_T" symvp=%"KS_FMT_PTR_T" lnm=%s, tnm=%s, err=%d\n",dvp,vp,lnm,tnm,error));
@@ -6017,7 +6013,7 @@ CRED_T *cred;
     ASSERT(VTOM(dvp)->mn_hdr.vp);
 
     if (MVFS_IS_INVALID_OFFSET(MVFS_UIO_OFFSET(uiop)) || uiop->uio_resid <= KDIRENT_RECLEN(0)) {
-	return(ENOENT);
+        return(ENOENT);
     }
 
     /* 
@@ -6029,7 +6025,7 @@ CRED_T *cred;
     direntlen = KDIRENT_RECLEN(sizeof(".."));
     dirent = (KDIRENT_T *)KMEM_ALLOC(direntlen, KM_SLEEP);
     if (dirent == NULL) {
-	return(ENOMEM);
+        return(ENOMEM);
     }
 
     /* Loop through simulated "." and ".." dir returning the right
@@ -6041,31 +6037,33 @@ CRED_T *cred;
 
     offset = 0;		/* Offset in dir we are processing */
     for (i = 0; i < 2; i++, offset += reclen) {
-	if (i == 0) nm = ".";
-	if (i == 1) nm = "..";
+        if (i == 0)
+            nm = ".";
+        if (i == 1)
+            nm = "..";
 
         nmlen = STRLEN(nm);
         reclen = KDIRENT_RECLEN(nmlen);
-	if (offset < MVFS_UIO_OFFSET(uiop))
-	    continue;		/* Skip entry user doesn't want */
+        if (offset < MVFS_UIO_OFFSET(uiop))
+            continue;		/* Skip entry user doesn't want */
 
-	KDIRENT_INIT(dirent, VTOM(dvp)->mn_hdr.fid.mf_dbid, nm, nmlen, offset+reclen);
+        KDIRENT_INIT(dirent, VTOM(dvp)->mn_hdr.fid.mf_dbid, nm, nmlen, offset+reclen);
 
-	/* Make sure room in buffer */
+        /* Make sure room in buffer */
 
-	if (reclen > uiop->uio_resid) {
-	    /* Error if no entries returned yet */
-	    if (MVFS_UIO_OFFSET(uiop) == o_offset) {
-		error = EINVAL;
-		break;
-	    }
-	    break;	/* No room */
-	}
+        if (reclen > uiop->uio_resid) {
+            /* Error if no entries returned yet */
+            if (MVFS_UIO_OFFSET(uiop) == o_offset) {
+                error = EINVAL;
+                break;
+            }
+            break;	/* No room */
+        }
 
-	/* Copy to user */
+        /* Copy to user */
 
-	error = READDIR_UIOMOVE((caddr_t)dirent, &reclen,
-				UIO_READ, uiop, offset);
+        error = READDIR_UIOMOVE((caddr_t)dirent, &reclen,
+                                UIO_READ, uiop, offset);
         if (error != 0)
             break;
     }
@@ -6133,7 +6131,6 @@ mvfs_readdir_ctx(
      * asserts fail in audit code)
      */
     MVFS_ENTER_FS(mth);
-
     /*
      * Maximum size of a Large File Directory is 31 bits.
      * If offset is greater than this value, return eofp;
@@ -6147,58 +6144,58 @@ mvfs_readdir_ctx(
     }
 
     if (eofp != NULL)
-	*eofp = 0;
+        *eofp = 0;
 
     /* Switch based on class of object */
 
     switch (VTOM(dvp)->mn_hdr.mclass) {
-	case MFS_VIEWCLAS:
-	case MFS_LOOPCLAS:	/* Pass on to real vnode */
-	    MVOP_RWRDLOCK(MFS_CLRVP(dvp), ctxp);
-	    error = MVOP_READDIR(MFS_REALVP(dvp), uiop, cd, eofp, ctxp);
-	    MVOP_RWRDUNLOCK(MFS_CLRVP(dvp), ctxp);
-	    break;
-	case MFS_NTVWCLAS:
-	    error = mvfs_ntvw_readdir(dvp, uiop, MVFS_CD2CRED(cd), eofp);
-	    break;
-	case MFS_VIEWDIRCLAS:
-	    error = mvfs_viewdirreaddir(dvp, uiop, MVFS_CD2CRED(cd), eofp);
-	    break;
-	case MFS_VOBRTCLAS:
-	    dvp = mfs_bindroot(dvp, cd, &error);
-	    if (error) {
-		/*
-		 * For a NULL View call routine which will return
+        case MFS_VIEWCLAS:
+        case MFS_LOOPCLAS:	/* Pass on to real vnode */
+            MVOP_RWRDLOCK(MFS_CLRVP(dvp), ctxp);
+            error = MVOP_READDIR(MFS_REALVP(dvp), uiop, cd, eofp, ctxp);
+            MVOP_RWRDUNLOCK(MFS_CLRVP(dvp), ctxp);
+            break;
+        case MFS_NTVWCLAS:
+            error = mvfs_ntvw_readdir(dvp, uiop, cd, eofp);
+            break;
+        case MFS_VIEWDIRCLAS:
+            error = mvfs_viewdirreaddir(dvp, uiop, MVFS_CD2CRED(cd), eofp);
+            break;
+        case MFS_VOBRTCLAS:
+            dvp = mfs_bindroot(dvp, cd, &error);
+            if (error) {
+                /*
+                 * For a NULL View call routine which will return
                  * dummied up '.' and '..'
-		 */
-	        if (error == ESRCH) 
-		    error = mfs_noview_readdir(dvp, uiop, MVFS_CD2CRED(cd));
-		break;
-	    }
+                 */
+                if (error == ESRCH) 
+                    error = mfs_noview_readdir(dvp, uiop, MVFS_CD2CRED(cd));
+                break;
+            }
             ASSERT(dvp);
             ASSERT(VTOM(dvp));
-	    ASSERT(MFS_ISVOB(VTOM(dvp)));
-	    /* Fall through */
-	case MFS_VOBCLAS: {
+            ASSERT(MFS_ISVOB(VTOM(dvp)));
+            /* Fall through */
+        case MFS_VOBCLAS: {
 
-	    (void) mfs_rebind_vpp((dvp != advp), &dvp, cd);
+            (void) mfs_rebind_vpp((dvp != advp), &dvp, cd);
 
             mnp = VTOM(dvp);
-	    ASSERT(MFS_ISVOB(mnp));
-	    /*
-	     * To force reasonable name and readdir cache consistency, 
+            ASSERT(MFS_ISVOB(mnp));
+            /*
+             * To force reasonable name and readdir cache consistency, 
              * validate the AC on the dir and force a refetch
              * if it has timed out.  If the dir was modified
              * then the attr cache code will flush the name cache.
-	     * FIXME: really way reply field in clnt_readdir that
+             * FIXME: really way reply field in clnt_readdir that
              * validates existing name cache...
              *
              * This call is made here instead of in clnt_readdir
              * to avoid deep stacks.
              */
 
-	    if (mfs_ac_timedout(mnp, FALSE, cd )) {
-		if (mfs_getattr(dvp, NULL, 0, cd) != 0) {
+            if (mfs_ac_timedout(mnp, FALSE, cd)) {
+                if (mfs_getattr(dvp, NULL, 0, cd) != 0) {
                     /* getattr will usually indirectly flush the cache for this
                        node if DTM has changed on directory, via
                        mfs_clnt_getattr()->mfs_attrcache()->mfs_ac_modevents() */
@@ -6206,10 +6203,10 @@ mvfs_readdir_ctx(
                     mvfs_rddir_cache_flush(mnp);
                     MUNLOCK(mnp);
                 }
-		BUMPSTAT(mfs_acstat.ac_misses);
-		BUMPVSTAT(dvp,acstat.ac_misses);
+                BUMPSTAT(mfs_acstat.ac_misses);
+                BUMP_VACSTAT(dvp,acstat.ac_misses);
                 BUMPSTAT(mfs_acstat.ac_rddirmiss);
-	    } else {
+            } else {
                 /*
                  * Look in readdir cache on mnode
                  */
@@ -6231,21 +6228,21 @@ mvfs_readdir_ctx(
             }
             if (!fromcache)
                 error = mfs_clnt_readdir(dvp, uiop, cd, eofp);
-	    break;
+            break;
         }
-	default:
-	    error = ENXIO;
-	    break;
+        default:
+            error = ENXIO;
+            break;
     }
 
 errout:
     if (!error) {
-	MFS_AUDIT(MFS_AR_READ, NULL, NULL, NULL, NULL, dvp, cd);
+        MFS_AUDIT(MFS_AR_READ, NULL, NULL, NULL, NULL, dvp, cd);
     }
 
     if (dvp != advp) {
-	ASSERT(!MFS_ISVIEWDIR(VTOM(dvp)));
-	VN_RELE(dvp);   /* Release if allocated bound root vnode */
+        ASSERT(!MFS_ISVIEWDIR(VTOM(dvp)));
+        ATRIA_VN_RELE(dvp, cd);   /* Release if allocated bound root vnode */
     }
     MDB_VLOG((MFS_VREADDIR,
               "fromcache=%d, vp=%"KS_FMT_PTR_T" err=%d pid=%d, off=%"MVFS_FMT_MOFFSET_T_D"/%"MVFS_FMT_UIO_OFFSET_D", bc=%"MVFS_FMT_MOFFSET_T_D"\n",
@@ -6286,12 +6283,13 @@ mvfs_fsync_ctx(
     /* Force out our own pages if we have any before locking the mnode */
 
     if (MVFS_ISVTYPE(vp, VREG) && MFS_ISVOB(VTOM(vp)) && 
-					VTOM(vp)->mn_hdr.cached_pages) {
-	error = PVN_FLUSH(vp, MFS_PVN_FLUSH, MVFS_CD2CRED(cd));
-	if (error) {
-	    MVFS_EXIT_FS(mth);
-	    return(error);
-	}
+        VTOM(vp)->mn_hdr.cached_pages)
+    {
+        error = PVN_FLUSH(vp, MFS_PVN_FLUSH, cd);
+        if (error) {
+            MVFS_EXIT_FS(mth);
+            return(error);
+        }
     }
 
     /* Fsync cleartext if one present. */
@@ -6299,21 +6297,21 @@ mvfs_fsync_ctx(
     ASSERT(VTOM(vp)->mn_hdr.vp);
     MLOCK(VTOM(vp));
     if ((cvp = MFS_REALVP(vp)) != NULL) {
-	VN_HOLD(cvp);
-	MUNLOCK(VTOM(vp));
-	error = MVOP_FSYNC(cvp, flag, cd, ctxp);
-	VN_RELE(cvp);
+        VN_HOLD(cvp);
+        MUNLOCK(VTOM(vp));
+        error = MVOP_FSYNC(cvp, flag, cd, ctxp);
+        ATRIA_VN_RELE(cvp, cd);
     } else {
-	MUNLOCK(VTOM(vp));
-	error = 0;
+        MUNLOCK(VTOM(vp));
+        error = 0;
     }
 
     /* Fsync any delayed attributes.  (MUST BE AFTER DATA SYNC!)  */
 
     if (!error && MFS_ISVOB(VTOM(vp))) {
-	MLOCK(VTOM(vp));
-	error = mvfs_sync_attr(VTOM(vp), NULL, MFS_USE_PROCBH, 0, cd);
-	MUNLOCK(VTOM(vp));
+        MLOCK(VTOM(vp));
+        error = mvfs_sync_attr(VTOM(vp), NULL, MFS_USE_PROCBH, 0, cd);
+        MUNLOCK(VTOM(vp));
     }
 
     MDB_VLOG((MFS_VFSYNC, "vp=%"KS_FMT_PTR_T" mcred=%"KS_FMT_PTR_T"\n",vp, MCRED(VTOM(vp))));
@@ -6358,30 +6356,30 @@ mvfs_lockctl_ctx(
     /* Must be a regular file */
 
     if (!MVFS_ISVTYPE(vp, VREG)) {
-	return(EINVAL);		/* by convention */
+        return(EINVAL);		/* by convention */
     }
-	
+        
     MVFS_ENTER_FS(mth);
     /* Switch based on class of object.  Note no need to
        check classes that only have dir objects in them. */
 
     switch (mnp->mn_hdr.mclass) {
-	case MFS_LOOPCLAS:	/* Pass on to real vnode */
+        case MFS_LOOPCLAS:	/* Pass on to real vnode */
             error = MVOP_LOCKCTL(MFS_REALVP(vp), ld, cmd, cd, ctxp);
-	    break;
-	case MFS_VOBCLAS: {
-	    error = 0;
-	    MLOCK(mnp);
-	    error = mfs_getcleartext(vp, &cvp, cd);
-	    MUNLOCK(mnp);
-	    if (error) break;
-	    error = MVOP_LOCKCTL(cvp, ld, cmd, cd, ctxp);
-	    CVN_RELE(cvp);
-	    break;
-	}
-	default:
-	    error = ENXIO;
-	    break;
+            break;
+        case MFS_VOBCLAS: {
+            error = 0;
+            MLOCK(mnp);
+            error = mfs_getcleartext(vp, &cvp, cd);
+            MUNLOCK(mnp);
+            if (error) break;
+            error = MVOP_LOCKCTL(cvp, ld, cmd, cd, ctxp);
+            CVN_RELE(cvp, cd);
+            break;
+        }
+        default:
+            error = ENXIO;
+            break;
     }
 
     MDB_VLOG((MFS_VLOCKCTL,"vp=%"KS_FMT_PTR_T" err= %d\n",vp,error));
@@ -6395,81 +6393,79 @@ mvfs_lockctl_ctx(
  */
 
 int
-mfs_vfid(vp, fidpp)
-VNODE_T *vp;
-struct fid **fidpp;
+mfs_vfid(
+    VNODE_T *vp,
+    struct fid **fidpp
+)
 {
     int error;
     mfs_xfid_t *mxfidp = 0;             /* shut up GCC with = 0 */
     mfs_mnode_t *mnp;
-    MVFS_DECLARE_THREAD(mth)
 
-    MVFS_ENTER_FS(mth);
     mnp = VTOM(vp);
     ASSERT(mnp->mn_hdr.vp);
     if (MFS_ISVOB(mnp) || MFS_ISVOBRT(mnp)) {
-	if (MFS_VIEW(vp) &&
-	    VTOM(MFS_VIEW(vp))->mn_view.exid == (u_int) -1) {
-	    /* not marked for export.  bounce it. */
-	    *fidpp = NULL;
+        if (MFS_VIEW(vp) &&
+            VTOM(MFS_VIEW(vp))->mn_view.exid == (u_int) -1) {
+            /* not marked for export.  bounce it. */
+            *fidpp = NULL;
             MVFS_VFID_SET_EXP_ERROR(error, mnp, vp);
-	} else {
+        } else {
 #ifdef KMEMDEBUG
-	    /* 
-	     * The MFS does not return the storage for a fid.  The
-	     * code that does can't be made to call mfs_kfree(), so
-	     * we can't use the mfs_kalloc() to allocate this storage..
-	     * so we go straight the the underlying allocator.
-	     */
-	    mxfidp = (mfs_xfid_t *)REAL_KMEM_ALLOC(sizeof(mfs_xfid_t), KM_SLEEP);
+            /* 
+             * The MFS does not return the storage for a fid.  The
+             * code that does can't be made to call mfs_kfree(), so
+             * we can't use the mfs_kalloc() to allocate this storage..
+             * so we go straight the the underlying allocator.
+             */
+            mxfidp = (mfs_xfid_t *)REAL_KMEM_ALLOC(sizeof(mfs_xfid_t), KM_SLEEP);
 #else
-	    mxfidp = (mfs_xfid_t *)KMEM_ALLOC(sizeof(mfs_xfid_t), KM_SLEEP);
+            mxfidp = (mfs_xfid_t *)KMEM_ALLOC(sizeof(mfs_xfid_t), KM_SLEEP);
 #endif
-	    if (mxfidp != NULL) {
-		mxfidp->mfx_len = MFS_XFIDDATASZ;
-		mxfidp->mfx_vid = 0;
-		mxfidp->mfx_dbid = mnp->mn_hdr.fid.mf_dbid;
-		mxfidp->mfx_gen  = mnp->mn_hdr.fid.mf_gen;
-		if (MFS_VIEW(vp)) {
-		    mxfidp->mfx_vid = (u_short)(VTOM(MFS_VIEW(vp))->mn_view.exid);
-		    /* Make the generation number be offset by the
-		     * hash of the view uuid.  This will detect and
-		     * return ESTALE if /view is unmounted (or system reboots)
-		     * and the views are registered in a different order
-		     * so that the view-id in mfx_vid is no longer the
-		     * same view as it used to be.
-		     */
-		    mxfidp->mfx_gen += 
-			mfs_uuid_to_hash32(&(VTOM(MFS_VIEW(vp))->mn_view.svr.uuid));
-		}
-		/*
-		 * also add in VOB uuid hash (needed to prevent same
-		 * view/different VOB confusion at the unbound VOB root)
-		 */
-		mxfidp->mfx_gen +=
-		    mfs_uuid_to_hash32(&(VFS_TO_MMI(vp->v_vfsp)->mmi_svr.uuid));
-		*fidpp = (struct fid *)mxfidp;
-		error = 0;
-	    } else {
-		*fidpp = NULL;
-		error = ENOMEM;
-	    }
-	}
+            if (mxfidp != NULL) {
+                mxfidp->mfx_len = MFS_XFIDDATASZ;
+                mxfidp->mfx_vid = 0;
+                mxfidp->mfx_dbid = mnp->mn_hdr.fid.mf_dbid;
+                mxfidp->mfx_gen  = mnp->mn_hdr.fid.mf_gen;
+                if (MFS_VIEW(vp)) {
+                    mxfidp->mfx_vid = (u_short)(VTOM(MFS_VIEW(vp))->mn_view.exid);
+                    /* Make the generation number be offset by the
+                     * hash of the view uuid.  This will detect and
+                     * return ESTALE if /view is unmounted (or system reboots)
+                     * and the views are registered in a different order
+                     * so that the view-id in mfx_vid is no longer the
+                     * same view as it used to be.
+                     */
+                    mxfidp->mfx_gen += 
+                        mfs_uuid_to_hash32(&(VTOM(MFS_VIEW(vp))->mn_view.svr.uuid));
+                }
+                /*
+                 * also add in VOB uuid hash (needed to prevent same
+                 * view/different VOB confusion at the unbound VOB root)
+                 */
+                mxfidp->mfx_gen +=
+                    mfs_uuid_to_hash32(&(VFS_TO_MMI(vp->v_vfsp)->mmi_svr.uuid));
+                *fidpp = (struct fid *)mxfidp;
+                error = 0;
+            } else {
+                *fidpp = NULL;
+                error = ENOMEM;
+            }
+        }
     } else {
         *fidpp = NULL;
         MVFS_VFID_SET_ERROR(error, mnp, vp);
     }
 
     if (!error) {
-	MDB_VLOG((MFS_VFID, "vp=%"KS_FMT_PTR_T" fid=%x/%x/%x/%x err=%d\n",vp,
-				((int *)mxfidp)[0], ((int *)mxfidp)[1],
-				((int *)mxfidp)[2], ((int *)mxfidp)[3], error));
+        MDB_VLOG((MFS_VFID, "vp=%"KS_FMT_PTR_T" fid=%x/%x/%x/%x err=%d\n",vp,
+                                ((int *)mxfidp)[0], ((int *)mxfidp)[1],
+                                ((int *)mxfidp)[2], ((int *)mxfidp)[3], error));
     }
     else {
-	MDB_VLOG((MFS_VFID, "vp=%"KS_FMT_PTR_T" err=%d\n",vp, error));
+        MDB_VLOG((MFS_VFID, "vp=%"KS_FMT_PTR_T" err=%d\n",vp, error));
     }
     BUMPSTAT(mfs_vnopcnt[MFS_VFID]);
-    MVFS_EXIT_FS(mth);
     return(error);
 }
 
@@ -6579,16 +6575,17 @@ int hold;
         ASSERT(VTOM(vp)->mn_hdr.vp);
         if ((vw = MFS_VIEW(vp)) != NULL) {
             if (VTOM(vw)->mn_view.id == MFS_NULLVID) return(NULL);
-	    if (VTOM(vw)->mn_view.svr.host == NULL ||
-	        MFS_STRBUFPN_PAIR_GET_KPN(&(VTOM(vw)->mn_view.svr.lpn)).s == NULL ||
-	        VTOM(vw)->mn_view.svr.rpn == NULL) {
-	        return(NULL);
-	    }
+            if (VTOM(vw)->mn_view.svr.host == NULL ||
+                MFS_STRBUFPN_PAIR_GET_KPN(&(VTOM(vw)->mn_view.svr.lpn)).s == NULL ||
+                VTOM(vw)->mn_view.svr.rpn == NULL)
+            {
+                return(NULL);
+            }
             if (hold) {
                 MFS_HOLDVW(vw);
             }
-	    return(vw);
-	}
+            return(vw);
+        }
     }
 
     /* 
@@ -6605,8 +6602,8 @@ int hold;
             if (hold) {
                 MFS_HOLDVW(vw);
             }
-	    return(vw);
-	}
+            return(vw);
+        }
     }
 
     /* No view found to use ... */
@@ -6632,6 +6629,7 @@ mfs_bindroot(
 )
 {
     VNODE_T *vw;
+
     int error;
     VNODE_T *rtvp = NULL;
     mfs_fid_t fid;
@@ -6650,44 +6648,49 @@ mfs_bindroot(
 
     vw = mfs_getview(vp, MVFS_CD2CRED(cd), TRUE /* HOLD */);
     if (vw == NULL) {
-	error = ESRCH;
-	goto errout;
+        error = ESRCH;
+        goto errout;
     }
 
     error = mvfs_rvclookup(vw, V_TO_MMI(vp)->mmi_rootvp, &fid, cd);
     if (!error) {
-	error = mfs_getvnode(vp->v_vfsp, vw, &fid, &rtvp, cd);
-	if (error) goto errout;
+        error = mfs_getvnode(vp->v_vfsp, vw, &fid, &rtvp, cd);
+        if (error) goto errout;
     } else if (error != ENOENT) {
-	goto errout;
+        goto errout;
     } else {		/* Find it the hard way */
-	error = mfs_clnt_bindroot(1, vw, vp->v_vfsp, "", &rtvp, cd);
+        error = mfs_clnt_bindroot(1, vw, vp->v_vfsp, "", &rtvp, cd);
 
         /* Update the bound root cache */
 
-	if (!error) {
-	    error = mvfs_rvcenter(vw, rtvp,
-				 &(VTOM(rtvp)->mn_hdr.fid), MVFS_CD2CRED(cd));
-	}
+        if (!error) {
+            error = mvfs_rvcenter(vw, rtvp,
+                                  &(VTOM(rtvp)->mn_hdr.fid), cd);
+        }
     }
 
     /* Make audit record for bound root and view of root */
 
     if (!error) {
-	ASSERT(rtvp);
+        ASSERT(rtvp);
         MFS_AUDIT(MFS_AR_ROOT, NULL, V_TO_MMI(vp)->mmi_mntpath,
-			NULL, NULL, rtvp, cd);
-	MFS_AUDIT(MFS_AR_VIEW, NULL, NULL, NULL, NULL, rtvp, cd);
+                        NULL, NULL, rtvp, cd);
+        MFS_AUDIT(MFS_AR_VIEW, NULL, NULL, NULL, NULL, rtvp, cd);
     }
 
     /* General exit code */
 
 errout:
-    MDB_XLOG((MDB_BINDROOT,"vp=%"KS_FMT_PTR_T" err=%d, vw=%"KS_FMT_PTR_T", rtvp=%"KS_FMT_PTR_T" rtmnp=%"KS_FMT_PTR_T"\n", vp, error, vw, rtvp, rtvp ? VTOM(rtvp) : 0));
-    if (vw != NULL) VN_RELE(vw);	/* Release allocated view */
-    if (errp) *errp = error;		/* Return error if wanted */
-    if (!error) return(rtvp);
-    else return(vp);			/* Return same vnode on error */
+    MDB_XLOG((MDB_BINDROOT,"vp=%"KS_FMT_PTR_T" err=%d, vw=%"KS_FMT_PTR_T", rtvp=%"KS_FMT_PTR_T" rtmnp=%"KS_FMT_PTR_T"\n",
+              vp, error, vw, rtvp, rtvp ? VTOM(rtvp) : 0));
+    if (vw != NULL)
+        ATRIA_VN_RELE(vw, cd);	/* Release allocated view */
+    if (errp)
+        *errp = error;		/* Return error if wanted */
+    if (!error)
+        return(rtvp);
+    else
+        return(vp);             /* Return same vnode on error */
 }
 
 /*
@@ -6701,20 +6704,20 @@ mfs_mnode_t *mnp;
     /* Set vnode type for init */
 
     switch (mnp->mn_hdr.mclass) {
-    	case MFS_SDEVCLAS: 	
-	    return(VCHR);
-	case MFS_VOBRTCLAS:
-	case MFS_VIEWDIRCLAS:
-	case MFS_VIEWCLAS:	
-	case MFS_NTVWCLAS:
-	    return(VDIR);
-	case MFS_VOBCLAS:
-	    return(mfs_ftype_to_vtype(mnp->mn_vob.attr.fstat.type)); 
-	case MFS_LOOPCLAS:
-	    ASSERT(mnp->mn_hdr.realvp);
-	    return(MVFS_GETVTYPE(MVFS_CVP_TO_VP(mnp->mn_hdr.realvp)));
-   	default: 
-	    MDKI_PANIC("mvfs: Unknown mnode type");
+        case MFS_SDEVCLAS: 	
+            return(VCHR);
+        case MFS_VOBRTCLAS:
+        case MFS_VIEWDIRCLAS:
+        case MFS_VIEWCLAS:	
+        case MFS_NTVWCLAS:
+            return(VDIR);
+        case MFS_VOBCLAS:
+            return(mfs_ftype_to_vtype(mnp->mn_vob.attr.fstat.type)); 
+        case MFS_LOOPCLAS:
+            ASSERT(mnp->mn_hdr.realvp);
+            return(MVFS_GETVTYPE(MVFS_CVP_TO_VP(mnp->mn_hdr.realvp)));
+        default: 
+            MDKI_PANIC("mvfs: Unknown mnode type");
     }
 
     return(VNON);		/* never reached */
@@ -6924,10 +6927,12 @@ mfs_mnode_t *mnp;
  */
 
 int
-mfs_makevobrtnode(vw, vfsp, vpp)
-VNODE_T *vw;
-VFS_T *vfsp;
-VNODE_T **vpp;
+mfs_makevobrtnode(
+    VNODE_T *vw,
+    VFS_T *vfsp,
+    VNODE_T **vpp,
+    CALL_DATA_T *cd
+)
 {
     mfs_mnode_t *mnp;
     VNODE_T *vp;
@@ -6938,21 +6943,21 @@ VNODE_T **vpp;
     MDB_CHKPOINT(0);
 
     if (vw == NULL) {
-	fid.mf_dbid = MVFS_ROOTDBID;
-	fid.mf_gen = MVFS_ROOTGEN;
+        fid.mf_dbid = MVFS_ROOTDBID;
+        fid.mf_gen = MVFS_ROOTGEN;
     } else {
-	/* Check for stale view passed in */
-	if (VTOM(vw)->mn_view.id == 0) {
-	    *vpp = NULL;
-	    return(ESTALE);
-	}
-	fid.mf_dbid = MVFS_ROOTDBID;
-	fid.mf_gen = MVFS_ROOTGEN;
+        /* Check for stale view passed in */
+        if (VTOM(vw)->mn_view.id == 0) {
+            *vpp = NULL;
+            return(ESTALE);
+        }
+        fid.mf_dbid = MVFS_ROOTDBID;
+        fid.mf_gen = MVFS_ROOTGEN;
     }
     mnp = mfs_mnget(MFS_VOBRTCLAS, vw, &fid, vfsp, &newnode);
     if (mnp == NULL) {
-	*vpp = NULL;
-	return(ENOMEM);
+        *vpp = NULL;
+        return(ENOMEM);
     }
 
     /* Get the vnode.  This macro must be called with the
@@ -6960,7 +6965,7 @@ VNODE_T **vpp;
        the vnode attached, initialized vnode refcount incremented,
        and mnode refcount decremented. */
 
-    error = MVFS_VNGET(vfsp, NULL, mnp, &vp);
+    error = MVFS_VNGET(vfsp, NULL, mnp, &vp, cd);
 
     ASSERT(error || (MFS_VIEW(vp) == vw));
 
@@ -6980,7 +6985,7 @@ mfs_makevobnode(
     VNODE_T *vw,	        /* View object is in (may be NULL) */
     view_fhandle_t *vfhp,	/* Optional view file handle ptr */
     VFS_T *vfsp,	        /* VFS ptr */
-    CRED_T *cred,		/* callers credentials */
+    CALL_DATA_T *cd,		/* callers credentials */
     VNODE_T **vpp	        /* Returned vnode ptr */
 )
 {
@@ -7003,22 +7008,22 @@ mfs_makevobnode(
 
     hmwarp = (MFS_HMVFH(vfhp) && !VTOM(vw)->mn_view.hm) ? 1 : 0;
     if (hmwarp) {
-        error = mfs_viewdirhmview(vw, &hmvw, cred);
-	if (error) { 
-	    vp = NULL;
-	    goto out;
-	}
-	vw = hmvw;	/* Use HM view for rest */
+        error = mfs_viewdirhmview(vw, &hmvw, cd);
+        if (error) { 
+            vp = NULL;
+            goto out;
+        }
+        vw = hmvw;	/* Use HM view for rest */
     }
-	
+        
     /* Make the fid and then get the mnp struct */
 
     fid.mf_dbid = vfhp->ver_dbid;
     fid.mf_gen  = vfhp->gen;
     mnp = mfs_mnget(MFS_VOBCLAS, vw, (void *)&fid, vfsp, &newnode);
     if (mnp == NULL) {
-	*vpp = NULL;
-	return(ENOMEM);
+        *vpp = NULL;
+        return(ENOMEM);
     }
 
     /* If a "newnode" update the file handle */
@@ -7035,37 +7040,60 @@ mfs_makevobnode(
        link/unlink etc. */
 
     if (vstatp) {
-	if (lvut) {
-	    mnp->mn_vob.lvut = *lvut;
-	    modflags = mvfs_ac_set_stat(mnp, vfsp, vstatp, TRUE, cred);
-	} else {
-	    mnp->mn_vob.lvut.tv_sec = mnp->mn_vob.lvut.tv_usec = 0;
-	    modflags = mvfs_ac_set_stat(mnp, vfsp, vstatp, FALSE, cred);
-	}
+        if (lvut) {
+            mnp->mn_vob.lvut = *lvut;
+            modflags = mvfs_ac_set_stat(mnp, vfsp, vstatp, TRUE, MVFS_CD2CRED(cd));
+        } else {
+            mnp->mn_vob.lvut.tv_sec = mnp->mn_vob.lvut.tv_usec = 0;
+            modflags = mvfs_ac_set_stat(mnp, vfsp, vstatp, FALSE, MVFS_CD2CRED(cd));
+        }
     } else {
-	modflags = 0;	/* Can't be modified */
+        modflags = 0;	/* Can't be modified */
     }
 
     /* Get the vnode.  This routine takes a locked mnode, and
-       attaches to vnode, bumps vnode refcount etc. to return with
-       an valid, refcounted vnode hooked up to an unlocked mnode. 
-       It also drops the mnode refcount acquired by mnget. */
-
-    error = MVFS_VNGET(vfsp, NULL, mnp, &vp);
+     * attaches to vnode, bumps vnode refcount etc. to return with
+     * an valid, refcounted vnode hooked up to an unlocked mnode. 
+     * It also drops the mnode refcount acquired by mnget.
+     * 
+     * The nowait version of this call is only used on Linux.  On other
+     * platforms it defaults to teh standard MVFS_VNGET.  The NOWAIT version
+     * is needed on Linux because of a race condition that exists between
+     * the invalidate code and the lookup code.  If a vnode is in the process
+     * of going away, the Linux code would wait for the vnode in question to
+     * finish going away and then create a new vnode.  This creates a race
+     * with the invalidate code which has already gotten a lock on the mnode
+     * being removed which it has to release in order to get the mnode lock
+     * on the parent directory.  The code here already holds the parent mnode 
+     * lock.  So it would be waiting for the invalidate to complete, but the 
+     * invaldiate code would be waiting for the parent mnode lock we hold,
+     * which is a classic deadly embrace.  We break that deadlock by telling
+     * MVFS_VNGET not to wait, in which case it just returns ENOENT which we 
+     * pass back to our caller.  The lookup case will drop the parent mnode
+     * lock and then reaquire it so that it can retry the lookup RPC call to
+     * the view server.  This will give the inactive a chance to complete and
+     * we will then proceed properly.
+     *
+     * None of our other callers should encounter this error but if they do,
+     * none of them actually reference the vnode and the next time they call
+     * vnget, it will find the NULL vnode pointer in the mnode and create the
+     * vnode then.
+     */
+    error = MVFS_VNGET_NOWAIT(vfsp, NULL, mnp, &vp, cd);
 
     if (!error) {
-	ASSERT(vp);
-	ASSERT(VTOM(vp) == mnp);
-	ASSERT(MTOV(mnp) == vp);
-	ASSERT(MVFS_GETVTYPE(vp) == mfs_ftype_to_vtype(mnp->mn_vob.attr.fstat.type));
+        ASSERT(vp);
+        ASSERT(VTOM(vp) == mnp);
+        ASSERT(MTOV(mnp) == vp);
+        ASSERT(MVFS_GETVTYPE(vp) == mfs_ftype_to_vtype(mnp->mn_vob.attr.fstat.type));
 
         /* 
-	 * If not a new mnode and modified, process modified events!
-	 */
+         * If not a new mnode and modified, process modified events!
+         */
 
         if (!newnode && (modflags != 0)) {
-	    MLOCK(mnp);
-	    (void) mfs_ac_modevents(vp, modflags, cred);
+            MLOCK(mnp);
+            (void)mfs_ac_modevents(vp, modflags, cd);
             /*
              * If the object changed (usually from cleartext COW),
              * flush the cleartext here (it might have come off the free
@@ -7078,24 +7106,26 @@ mfs_makevobnode(
 #ifdef MVFS_DEBUG
                 mvfs_log(MFS_LOG_DEBUG, "domod clear_rele vp=%"KS_FMT_PTR_T"\n", vp);
 #endif
-                mfs_clear_rele(vp, cred);
+                mfs_clear_rele(vp, cd);
             }
-	    MUNLOCK(mnp);
-	}
+            MUNLOCK(mnp);
+        }
 
 
         if (MFS_VIEW(vp) != vw) {
-	    VN_RELE(MFS_VIEW(vp));
-	    VTOM(vp)->mn_hdr.viewvp = vw;
-	    MFS_HOLDVW(vw);
+            ATRIA_VN_RELE(MFS_VIEW(vp), cd);
+            VTOM(vp)->mn_hdr.viewvp = vw;
+            MFS_HOLDVW(vw);
         }
     }
 
 out:
 
-    if (hmvw) VN_RELE(hmvw);	/* If got a hist mode view, release now */
+    if (hmvw)
+        ATRIA_VN_RELE(hmvw, cd); /* If got a hist mode view, release now */
 
-    MDB_XLOG((MDB_MKNOD,"vob: vp=%"KS_FMT_PTR_T",vfsp=%"KS_FMT_PTR_T",err=%d\n",vp,vfsp,error));
+    MDB_XLOG((MDB_MKNOD,"vob: vp=%"KS_FMT_PTR_T",vfsp=%"KS_FMT_PTR_T",err=%d\n",
+              vp, vfsp, error));
     MDB_CHKPOINT(0);
 
     *vpp = vp;
@@ -7119,7 +7149,7 @@ mfs_makeloopnode(
     VNODE_T *vw,
     CLR_VNODE_T *realcvp,
     VNODE_T **vpp,
-    CRED_T *cred
+    CALL_DATA_T *cd
 )
 {
     int error;
@@ -7136,7 +7166,7 @@ mfs_makeloopnode(
     /* Only cover dirs.  Never cover files/device/fifo/sockets.  */
 
     if (!MVFS_ISVTYPE(realvp, VDIR)) {
-	reason = "not dir"; goto nocover;
+        reason = "not dir"; goto nocover;
     }
 
     /* 
@@ -7147,7 +7177,7 @@ mfs_makeloopnode(
      */
 
     if (MFS_VPISMFS(realvp) && MFS_ISVIEWDIR(VTOM(realvp))) {
-	reason = "/view"; goto nocover;
+        reason = "/view"; goto nocover;
     }
 
     /*
@@ -7158,10 +7188,10 @@ mfs_makeloopnode(
      */
 
     if (realvp == ROOTDIR) {
-	MFS_HOLDVW(vw);
-	*vpp = vw;
-	error = 0;
-	goto out;
+        MFS_HOLDVW(vw);
+        *vpp = vw;
+        error = 0;
+        goto out;
     }
 
     /*
@@ -7178,15 +7208,17 @@ mfs_makeloopnode(
 
     /* Get current setview view for decisions to cover or not. */
 
-    setview = mfs_getview(NULL, cred, TRUE /* HOLD */);
+    setview = mfs_getview(NULL, MVFS_CD2CRED(cd), TRUE /* HOLD */);
     if (vw == setview && !VTOM(vw)->mn_view.always_cover &&
         !MVFS_MDEP_COVER_CVIEW())
     {
-	if (setview) VN_RELE(setview);	/* Done with setview */
-	reason="setview view";
+        if (setview)
+            ATRIA_VN_RELE(setview, cd); /* Done with setview */
+        reason="setview view";
         goto nocover;
     }
-    if (setview) VN_RELE(setview);
+    if (setview)
+        ATRIA_VN_RELE(setview, cd);
 
     /* 
      * /view/tag/xxx/vobrt:	This case is for vobroots that
@@ -7210,8 +7242,8 @@ mfs_makeloopnode(
         ** always been correct (not setting the VROOT flag), but the comment was
         ** wrong.
         */
-        error = mfs_makevobrtnode(vw,realvp->v_vfsp, vpp);
-	goto out;
+        error = mfs_makevobrtnode(vw,realvp->v_vfsp, vpp, cd);
+        goto out;
     }
 
     /*
@@ -7225,15 +7257,16 @@ mfs_makeloopnode(
      * makespecnode takes its own ref on realcvp
      */
     error = mfs_makespecnode(MFS_LOOPCLAS, vw, realcvp,
-			     MVFS_LOOPCLAS_VFSP(vrdp, realcvp,
+                             MVFS_LOOPCLAS_VFSP(vrdp, realcvp,
                                                 VTOM(vw)->mn_view.always_cover),
-                             vpp);
+                             vpp,
+                             cd);
 
 out:
     MDB_XLOG((MDB_MKNOD,"LOOP: realvp=%"KS_FMT_PTR_T", vfsp=%"KS_FMT_PTR_T", rvp=%"KS_FMT_PTR_T", err=%d\n", 
-	     realvp, 
-	     MVFS_LOOPCLAS_VFSP(vrdp, realvp, VTOM(vw)->mn_view.always_cover), 
-	     *vpp,error));
+             realvp, 
+             MVFS_LOOPCLAS_VFSP(vrdp, realvp, VTOM(vw)->mn_view.always_cover), 
+             *vpp,error));
     MDB_CHKPOINT(0);
     return(error);
 
@@ -7252,12 +7285,14 @@ nocover:		/* Just hold and return the orig vnode. */
  *	MFS_VIEWDIRCLAS     "
  */
 int
-mfs_makespecnode(class, vw, infop, vfsp, vpp)
-mfs_class_t class;
-VNODE_T *vw;
-void *infop;
-VFS_T *vfsp;
-VNODE_T **vpp;
+mfs_makespecnode(
+    mfs_class_t class,
+    VNODE_T *vw,
+    void *infop,
+    VFS_T *vfsp,
+    VNODE_T **vpp,
+    CALL_DATA_T *cd
+)
 {
     int error;
     VNODE_T *vp;
@@ -7276,34 +7311,34 @@ VNODE_T **vpp;
        by that means. */
 
     if (class == MFS_LOOPCLAS) {
-	ASSERT(vw);
-	ASSERT(infop);
-	fid.mf_realvp = (CLR_VNODE_T *)infop;
+        ASSERT(vw);
+        ASSERT(infop);
+        fid.mf_realvp = (CLR_VNODE_T *)infop;
         /*
          * Put the real vnode's vfsp in the fid, so that mnfind has
          * enough detail to find a matching extant loopclas mnode on
          * systems which clone the loopback vfsp.
          */
-	fid.mf_realvfsp = MVFS_CVP_TO_VP(fid.mf_realvp)->v_vfsp;
-	fidp = &fid;
+        fid.mf_realvfsp = MVFS_CVP_TO_VP(fid.mf_realvp)->v_vfsp;
+        fidp = &fid;
     } else {
-	if (infop) {
-	    fid.mf_mnum = *(u_long *)infop;
-	    fid.mf_gen  = 0;
-	    fidp = &fid;
-	} else {
-	    fidp = NULL;
-	}
+        if (infop) {
+            fid.mf_mnum = *(u_long *)infop;
+            fid.mf_gen  = 0;
+            fidp = &fid;
+        } else {
+            fidp = NULL;
+        }
     }
 
     mnp = mfs_mnget(class, vw, fidp, vfsp, &newnode);
     if (mnp == NULL) {
-	*vpp = NULL;
-	return(ENOMEM);
+        *vpp = NULL;
+        return(ENOMEM);
     }
 
     /* Go from mnode to vnode. */
-    error = MVFS_VNGET(mnp->mn_hdr.vfsp, vfsp, mnp, &vp);
+    error = MVFS_VNGET(mnp->mn_hdr.vfsp, vfsp, mnp, &vp, cd);
 
     MDB_XLOG((MDB_MKNOD,"spec: vp=%"KS_FMT_PTR_T",vfsp=%"KS_FMT_PTR_T",err=%d\n",vp,vfsp,error));
     MDB_CHKPOINT(0);
@@ -7404,22 +7439,22 @@ mfs_rebind_vpp(
      */
 
     if (mfs_ac_timedout(mnp, FALSE, cd)) {
-	error = mfs_clnt_getattr(*vpp, cd);
-	if (error == ESTALE || error == EIO) {
-	    mvfs_logperr(MFS_LOG_DEBUG, error, 
-		"rebind: getattr vw=%s vob=%s dbid=0x%x", 
-			mfs_vp2vw(*vpp), mfs_vp2dev(*vpp), mfs_vp2dbid(*vpp));
-	    MLOCK(mnp);
-	    goto hardway;
-	}
+        error = mfs_clnt_getattr(*vpp, cd);
+        if (error == ESTALE || error == EIO) {
+            mvfs_logperr(MFS_LOG_DEBUG, error, 
+                "rebind: getattr vw=%s vob=%s dbid=0x%x", 
+                        mfs_vp2vw(*vpp), mfs_vp2dev(*vpp), mfs_vp2dbid(*vpp));
+            MLOCK(mnp);
+            goto hardway;
+        }
         if (error) {
-	    mvfs_logperr(MFS_LOG_WARN, error, 
-		"rebind: getattr: vw=%s vob=%s dbid=0x%x", 
-			mfs_vp2vw(*vpp), mfs_vp2dev(*vpp), mfs_vp2dbid(*vpp));
-	    return(0);
-	}
-	BUMPSTAT(mfs_acstat.ac_misses);
-	BUMPVSTAT(*vpp,acstat.ac_misses);
+            mvfs_logperr(MFS_LOG_WARN, error, 
+                "rebind: getattr: vw=%s vob=%s dbid=0x%x", 
+                        mfs_vp2vw(*vpp), mfs_vp2dev(*vpp), mfs_vp2dbid(*vpp));
+            return(0);
+        }
+        BUMPSTAT(mfs_acstat.ac_misses);
+        BUMP_VACSTAT(*vpp,acstat.ac_misses);
     }
     
     /*
@@ -7429,68 +7464,67 @@ mfs_rebind_vpp(
 
     MLOCK(mnp);
     if (mnp->mn_vob.rebind.valid && 
-			MFS_BH_SAMECONFIG(mth->thr_bh,
-					  mnp->mn_vob.rebind.bh)) {
+                        MFS_BH_SAMECONFIG(mth->thr_bh,
+                                          mnp->mn_vob.rebind.bh)) {
 
-	/* Check for rebind to same version */
+        /* Check for rebind to same version */
 
-	if (mnp->mn_vob.rebind.self) {
-	    MUNLOCK(mnp);
+        if (mnp->mn_vob.rebind.self) {
+            MUNLOCK(mnp);
             MDB_XLOG((MDB_REBIND,"pid=%d bh %x.%x vp=%"KS_FMT_PTR_T" rebound self\n", MDKI_CURPID(), mth->thr_bh.build_session, mth->thr_bh.target_id, *vpp));
-	    return(0);
-	} else {
-  	    fid = mnp->mn_vob.rebind.fid;
-	    evtime = mnp->mn_vob.rebind.evtime;
-	    MUNLOCK(mnp);
-	    error = mfs_getvnode(mnp->mn_hdr.vfsp, mnp->mn_hdr.viewvp,
-			&fid, &vp, cd);
-	    if (!error) {
-		ASSERT(MFS_VPISMFS(vp));
-		ASSERT(MFS_ISVOB(VTOM(vp)));
-		if (!MFS_TVEQ(VTOM(vp)->mn_vob.attr.event_time, 
-			evtime)) {
-		    VN_RELE(vp);
-		    vp = NULL;
-		    MLOCK(mnp);
-		    goto hardway;	/* Do it the hard way */
-		}
-	    } else {
-		mvfs_logperr(MFS_LOG_DEBUG, error,
-			"rebind: getvnode vw=%s vob=%s dbid=0x%x",
-			   mfs_vp2vw(*vpp), 
-			   mfs_vp2dev(*vpp), fid.mf_dbid);
-		MLOCK(mnp);
-		goto hardway;
-	    }
-	}
+            return(0);
+        } else {
+            fid = mnp->mn_vob.rebind.fid;
+            evtime = mnp->mn_vob.rebind.evtime;
+            MUNLOCK(mnp);
+            error = mfs_getvnode(mnp->mn_hdr.vfsp, mnp->mn_hdr.viewvp,
+                        &fid, &vp, cd);
+            if (!error) {
+                ASSERT(MFS_VPISMFS(vp));
+                ASSERT(MFS_ISVOB(VTOM(vp)));
+                if (!MFS_TVEQ(VTOM(vp)->mn_vob.attr.event_time, evtime)) {
+                    ATRIA_VN_RELE(vp, cd);
+                    vp = NULL;
+                    MLOCK(mnp);
+                    goto hardway;	/* Do it the hard way */
+                }
+            } else {
+                mvfs_logperr(MFS_LOG_DEBUG, error,
+                        "rebind: getvnode vw=%s vob=%s dbid=0x%x",
+                           mfs_vp2vw(*vpp), 
+                           mfs_vp2dev(*vpp), fid.mf_dbid);
+                MLOCK(mnp);
+                goto hardway;
+            }
+        }
     } else {		/* Cache miss - do it the hard way */
 hardway:
-	MFS_REBINDINVAL(mnp);
-	MUNLOCK(mnp);
-	error = mfs_clnt_rebind_dir(*vpp, &vp, cd);
+        MFS_REBINDINVAL(mnp);
+        MUNLOCK(mnp);
+        error = mfs_clnt_rebind_dir(*vpp, &vp, cd);
         if (error) {
-	    mvfs_logperr(MFS_LOG_WARN, error, "rebind: vw=%s vob=%s dbid=0x%x",
-		mfs_vp2vw(*vpp),
-		mfs_vp2dev(*vpp), mfs_vp2dbid(*vpp));
-	    goto errout;
-	}
-	ASSERT(MFS_ISVOB(VTOM(vp)));
+            mvfs_logperr(MFS_LOG_WARN, error, "rebind: vw=%s vob=%s dbid=0x%x",
+                mfs_vp2vw(*vpp),
+                mfs_vp2dev(*vpp), mfs_vp2dbid(*vpp));
+            goto errout;
+        }
+        ASSERT(MFS_ISVOB(VTOM(vp)));
 
-	/* Check if rebinding got back same version */
+        /* Check if rebinding got back same version */
 
-	if (vp == *vpp) {	/* False alarm */
-	    VN_RELE(vp);
-	    mfs_rebind_self(*vpp, cd);
-	    goto errout;	/* No need to rebind */
-	} else {
-	    MLOCK(mnp);
-	    mnp->mn_vob.rebind.valid = 1;
+        if (vp == *vpp) {	/* False alarm */
+            ATRIA_VN_RELE(vp, cd);
+            mfs_rebind_self(*vpp, cd);
+            goto errout;	/* No need to rebind */
+        } else {
+            MLOCK(mnp);
+            mnp->mn_vob.rebind.valid = 1;
             mnp->mn_vob.rebind.self = 0;
-	    mnp->mn_vob.rebind.bh = mth->thr_bh;
-	    mnp->mn_vob.rebind.fid = VTOM(vp)->mn_hdr.fid;
-	    mnp->mn_vob.rebind.evtime = VTOM(vp)->mn_vob.attr.event_time;
-	    MUNLOCK(mnp);
-	}
+            mnp->mn_vob.rebind.bh = mth->thr_bh;
+            mnp->mn_vob.rebind.fid = VTOM(vp)->mn_hdr.fid;
+            mnp->mn_vob.rebind.evtime = VTOM(vp)->mn_vob.attr.event_time;
+            MUNLOCK(mnp);
+        }
     }
 
     /* Replace vnode passed in.  Release the old vnode if
@@ -7498,15 +7532,15 @@ hardway:
 
     ASSERT(vp);
     if (release) {
-	VN_RELE(*vpp);
+        ATRIA_VN_RELE(*vpp, cd);
     }
     *vpp = vp;
     rebound = 1;
 
 errout:
     MDB_XLOG((MDB_REBIND,"pid=%d, bh %x.%x dvp %"KS_FMT_PTR_T" (%"KS_FMT_PTR_T") -> %"KS_FMT_PTR_T" (%"KS_FMT_PTR_T") error=%d\n", 
-		MDKI_CURPID(), mth->thr_bh.build_session, 
-		mth->thr_bh.target_id, xvp, VTOM(xvp), *vpp, VTOM(*vpp), error));
+                MDKI_CURPID(), mth->thr_bh.build_session, 
+                mth->thr_bh.target_id, xvp, VTOM(xvp), *vpp, VTOM(*vpp), error));
     return(rebound);
 }
 
@@ -7558,7 +7592,7 @@ mvfs_seek_ctx(
     if (VTOM(vp)->mn_hdr.mclass == MFS_VIEWCLAS ||
         VTOM(vp)->mn_hdr.mclass == MFS_LOOPCLAS)
     {
-	/* Pass on to real vnode */
+        /* Pass on to real vnode */
           return MVOP_SEEK(MFS_REALVP(vp), ooff, noffp, ctxp);
     }
 
@@ -7605,9 +7639,9 @@ mvfs_devadjust(dev_t dev, VNODE_T *vp)
      */
     if (vw)
         dev = MDKI_MAKEDEVICE(MDKI_MAJOR(dev),
-			      MDKI_MINOR(dev)|((VTOM(vw)->mn_view.id & MVFS_VIEW_MASK_BITS) << MVFS_VIEW_SHIFT_BITS));
+                              MDKI_MINOR(dev)|((VTOM(vw)->mn_view.id & MVFS_VIEW_MASK_BITS) << MVFS_VIEW_SHIFT_BITS));
     return dev;
 
 }
 
-static const char vnode_verid_mvfs_vnodeops_c[] = "$Id:  bf2270f5.804f11e2.822a.00:01:84:c3:8a:52 $";
+static const char vnode_verid_mvfs_vnodeops_c[] = "$Id:  122f4969.86c94ce0.bf44.b7:0a:74:bc:a7:39 $";
