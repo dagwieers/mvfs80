@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 1999, 2012 IBM Corporation.
+ * Copyright (C) 1999, 2014 IBM Corporation.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -30,15 +30,24 @@ extern int
 vnode_iop_create(
     INODE_T * parent,
     DENT_T * dentry,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0)
+    umode_t mode,
+    bool excl
+#else /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0) */
     int mode,
     struct nameidata *nd
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0) */
 );
 
 extern DENT_T *
 vnode_iop_lookup(
     INODE_T *dir,
     DENT_T *file,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0)
+    unsigned int flags
+#else /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0) */
     struct nameidata *nd
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0) */
 );
 
 extern int
@@ -62,7 +71,11 @@ extern int
 vnode_iop_mkdir(
     INODE_T *parent,
     DENT_T *new,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,3,0)
+    umode_t mode
+#else /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,3,0) */
     int mode
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,3,0) */
 );
 extern int
 vnode_iop_rmdir(
@@ -73,7 +86,11 @@ extern int
 vnode_iop_mknod(
     INODE_T *parent,
     DENT_T *new,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,3,0)
+    umode_t mode,
+#else
     int mode,
+#endif
     dev_t dev
 );
 extern int
@@ -314,8 +331,8 @@ vnlayer_linux_vattr2kstat(
     GET(mode, MODE);
     dst->mode |= vnlayer_vtype_to_mode(VATTR_GET_TYPE(src));
     GET(nlink, NLINK);
-    GET(uid, UID);
-    GET(gid, GID);
+    GET(uid, KUID);
+    GET(gid, KGID);
     GET(rdev, RDEV);
     GET_TIME(atime, ATIME);
     GET_TIME(mtime, MTIME);
@@ -370,8 +387,8 @@ vnode_iop_iattr2vattr(
         VATTR_SET_ ## UUU(dst, src->ia_ ## lll);        \
         dst->va_mask |= AT_ ## UUU;                     \
     }
-    SET(UID,uid)
-    SET(GID,gid)
+    SET(KUID,uid)
+    SET(KGID,gid)
     SET(SIZE,size)
 #undef SET
 
@@ -601,8 +618,14 @@ extern int
 vnode_iop_create(
     INODE_T * parent,
     struct dentry * dentry,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0)
+    umode_t mode,
+    /* XXX decide what to do with excl param */
+    bool excl
+#else /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0) */
     int mode,
     struct nameidata *nd
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0) */
 )
 {
     int err = 0;
@@ -686,7 +709,11 @@ DENT_T *
 vnode_iop_lookup(
     INODE_T *dir,
     struct dentry *dent,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0)
+    unsigned int flags
+#else /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0) */
     struct nameidata *nd
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0) */
 )
 {
     char *name;
@@ -716,7 +743,10 @@ vnode_iop_lookup(
      */
     dvp = ITOV(dir);
     ctx.dentrypp = &found_dentry;
-    ctx.flags = LOOKUP_CTX_VALID;
+    ctx.internal_flags = LOOKUP_CTX_VALID;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0)
+    ctx.kernel_flags = flags;
+#endif
 
     err = VOP_LOOKUP(dvp, name, &rt_vnode, (struct pathname *)NULL,
                      VNODE_LF_LOOKUP, NULL, &cd, &ctx);
@@ -809,7 +839,10 @@ vnode_iop_lookup(
             VN_RELE(rt_vnode);
             VATTR_FREE(vap);
             mdki_linux_destroy_call_data(&cd);
-            return VNODE_DGET(vnlayer_get_root_dentry());
+            found_dentry = vnlayer_get_root_dentry();
+            if (found_dentry != NULL)
+                return VNODE_DGET(found_dentry);
+            return NULL;
         }
         else if (vnlayer_looproot_vp != NULL &&
                  rt_vnode == vnlayer_looproot_vp &&
@@ -1133,7 +1166,11 @@ extern int
 vnode_iop_mkdir(
     INODE_T *parent,
     DENT_T *new,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,3,0)
+    umode_t mode
+#else /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,3,0) */
     int mode
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,3,0) */
 )
 {
     VNODE_T *new_vnode = NULL;
@@ -1212,7 +1249,11 @@ extern int
 vnode_iop_mknod(
     INODE_T *parent,
     DENT_T *new,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,3,0)
+    umode_t mode,
+#else
     int mode,
+#endif
     dev_t dev
 )
 {
@@ -1439,7 +1480,11 @@ DENT_T *
 vnlayer_hijacked_lookup(
     INODE_T *dir,
     struct dentry *dent,
-    struct nameidata *nd
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0)
+    unsigned int n
+#else
+    struct nameidata *n
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0) */
 )
 {
     DENT_T *parent = dent->d_parent;
@@ -1447,7 +1492,7 @@ vnlayer_hijacked_lookup(
 
     if (!DENT_IS_ROOT_ALIAS(parent)) {
         /* This is not our faked-up dentry, use the provided function */
-        return (*vnlayer_root_iops_copy.lookup)(dir, dent, nd);
+        return (*vnlayer_root_iops_copy.lookup)(dir, dent, n);
     }
     alias = DENT_GET_ALIAS(parent);
     ASSERT(alias->rootdentry->d_inode == dir);
@@ -1571,4 +1616,4 @@ vnode_iop_removexattr(
     }
     return err;
 }
-static const char vnode_verid_mvfs_linux_iops_c[] = "$Id:  1f8d3704.065811e2.940a.00:01:84:c3:8a:52 $";
+static const char vnode_verid_mvfs_linux_iops_c[] = "$Id:  c8b2d741.e2bd11e3.8cd7.00:11:25:27:c4:b4 $";

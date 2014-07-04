@@ -1839,8 +1839,7 @@ mvfs_attrcache(
     VFS_T *vfsp,
     view_vstat_t *vstat,
     int expmod,     /* Indicates caller expects this modification */
-    CALL_DATA_T *cd,
-    int update_attrs
+    CALL_DATA_T *cd
 );
 
 EXTERN int
@@ -4323,4 +4322,4 @@ EXTERN tbs_boolean_t mvfs_unload_in_progress;
 #endif
 
 #endif /* MVFS_BASE_H_ */
-/* $Id: ce055a10.7d4911e3.81b9.44:37:e6:71:2b:ed $ */
+/* $Id: a701a4d6.4bbb481b.a63e.82:38:14:44:64:af $ */

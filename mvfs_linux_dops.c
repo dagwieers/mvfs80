@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 1999, 2012 IBM Corporation.
+ * Copyright (C) 1999, 2014 IBM Corporation.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -28,34 +28,44 @@
  * Dentry operations (and some utility functions) for MVFS
  */
 
+extern void
+vnode_dop_release(DENT_T *dentry);
+
 extern int
 vnode_dop_revalidate(
     DENT_T *dentry,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0)
+    unsigned int flags 
+#else
     struct nameidata *nd
+#endif
 );
-
-extern void
-vnode_dop_release(DENT_T *dentry);
 
 #if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,32)
 extern int
 vnode_dop_hash(
     const DENT_T *dentry,
+# if LINUX_VERSION_CODE <= KERNEL_VERSION(3,11,0)
     const struct inode *inode,
+# endif
     struct qstr *namep
 );
 
 extern int
 vnode_dop_compare(
     const struct dentry *dparent,
+# if LINUX_VERSION_CODE < KERNEL_VERSION(3,11,0)
     const struct inode *iparent,
+# endif
     const struct dentry *dentry,
+# if LINUX_VERSION_CODE < KERNEL_VERSION(3,11,0)
     const struct inode *inode,
+# endif
     unsigned int tlen,
     const char *tname,
     const struct qstr *namep
 );
-#else
+#else /* 2.6.32 and before */
 extern int
 vnode_dop_hash(
     DENT_T *dentry,
@@ -78,6 +88,7 @@ vnode_dop_compare(
 
 #if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,32)
 #define DOPS_INITIALIZER                                                \
+     /* d_weak_revalidate not implemented */                            \
     .d_revalidate = vnode_dop_revalidate,                               \
     .d_hash = vnode_dop_hash, /* hash (we overload it for auditing) */  \
     .d_delete = (int (*)(const struct dentry *)) vnode_dop_delete,      \
@@ -126,7 +137,11 @@ struct dentry_operations vnode_setview_dentry_ops = { DOPS_INITIALIZER };
 extern int
 vnode_dop_revalidate(
     DENT_T *dentry,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0)
+    unsigned int flags 
+#else
     struct nameidata *nd
+#endif
 )
 {
     INODE_T *parent, *ip;
@@ -173,7 +188,11 @@ vnode_dop_revalidate(
             ok = 0;   /* if no realdentry, get rid of it */
         } else {
             if (rdent->d_op && rdent->d_op->d_revalidate) {
-                ok = (*rdent->d_op->d_revalidate)(rdent, nd);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0)
+                ok = rdent->d_op->d_revalidate(rdent, flags);
+#else
+                ok = rdent->d_op->d_revalidate(rdent, nd);
+#endif
             } else {
                 /* Neither ext3 nor reiserfs provide a d_revalidate
                  * function.  We need to verify the real dentry ourselves
@@ -246,22 +265,35 @@ vnode_dop_revalidate(
         }
         /* Just call lookup for the auditing. */
         /* LF_AUDIT means no extra reference returned on vpp */
-        ctx.flags = 0;
+        ctx.internal_flags = 0;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0)
+        ctx.kernel_flags = flags;
+#endif
         ctx.dentrypp = NULL;
         (void) VOP_LOOKUP(ITOV(parent), (char *)dentry->d_name.name,
                           &vp, NULL, VNODE_LF_AUDIT, NULL, &cd, &ctx);
+    } else
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,38)
-    } else if (nd->flags & LOOKUP_RCU) {
-         /* RCU is not allowed, see vnode_iop_permission */
-         ok = -ECHILD;
-#endif
-    } else { /* Not Loopback, one of our files */
+# if LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0)
+    if (flags & LOOKUP_RCU)
+# else
+    if (nd->flags & LOOKUP_RCU)
+# endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0) */
+        /* RCU is not allowed, see vnode_iop_permission */
+        ok = -ECHILD;
+    else
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,38) */
+    {
+        /* Not Loopback, one of our files */
         /*
          * Call VFS layer to inform it of a lookup of the name being
          * revalidated.
          */
         VNODE_T *rvp = NULL;
-        ctx.flags = 0;
+        ctx.internal_flags = 0;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0)
+        ctx.kernel_flags = flags;
+#endif
         ctx.dentrypp = NULL;
         /* LF_LOOKUP includes full auditing */
         error = VOP_LOOKUP(dvp, (char *)dentry->d_name.name, &rvp,
@@ -334,7 +366,9 @@ vnode_dop_revalidate(
 extern int
 vnode_dop_hash(
     const DENT_T *dentry,
+# if LINUX_VERSION_CODE <= KERNEL_VERSION(3,11,0)
     const struct inode *inode,
+# endif
     struct qstr *namep
 )
 #else
@@ -346,7 +380,7 @@ vnode_dop_hash(
 #endif
 {
     VNODE_T *dvp, *vp;
-    struct lookup_ctx ctx;
+    struct lookup_ctx ctx = {0};
     CALL_DATA_T cd;
 
     ASSERT_DCACHE_UNLOCKED();
@@ -361,8 +395,6 @@ vnode_dop_hash(
     ASSERT(MDKI_INOISMVFS(dentry->d_parent->d_inode));
     mdki_linux_init_call_data(&cd);
     vp = ITOV(dentry->d_inode);
-    ctx.flags = 0;
-    ctx.dentrypp = NULL;
     (void) VOP_LOOKUP(dvp, (char *)dentry->d_name.name,
                       &vp, NULL, VNODE_LF_AUDIT, NULL, &cd, &ctx);
     /* LF_AUDIT means no extra reference returned on vpp */
@@ -447,14 +479,21 @@ vnode_dop_release(DENT_T *dentry)
 extern int
 vnode_dop_compare(
     const struct dentry *dparent,
+# if LINUX_VERSION_CODE < KERNEL_VERSION(3,11,0)
     const struct inode *iparent,
+#endif
     const struct dentry *dentry,
+# if LINUX_VERSION_CODE < KERNEL_VERSION(3,11,0)
     const struct inode *inode,
+#endif
     unsigned int tlen,
     const char *tname,
     const struct qstr *namep
 )
 {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,11,0)
+    const struct inode *iparent = dparent->d_inode;
+#endif
     if (MDKI_INOISMVFS(iparent)) {
         VNODE_T *vp = ITOV(iparent);
         if ((vp->v_flag & (VLOOP | VLOOPROOT)) == 0) {
@@ -516,14 +555,14 @@ vnlayer_make_dcache(
     struct qstr dname;
     struct dentry *parent;
     struct dentry *dentry;
-    struct list_head *list;
+    MDKI_IDENTRY_T *list;
     INODE_T *ip = VTOI(vp);
 
     dname.name = nm;
     dname.len = strlen(nm);
     dname.hash = full_name_hash(dname.name, dname.len);
-    list = VTOI(dvp)->i_dentry.next;
-    parent = list_entry(list, struct dentry, d_alias);
+    list = MDKI_IDENTRY_HEAD(VTOI(dvp));
+    parent = MDKI_IDENTRY_LIST_ENTRY(list);
     /* dcache code takes its lock as required */
     if ((dentry = d_lookup(parent, &dname)) != NULL) {
         MDKI_TRACE(TRACE_DCACHE,"d_lookup found this already? dvp %p vp %p dp %p d->ip %p\n",
@@ -572,7 +611,7 @@ mdki_rm_dcache(VNODE_T *vp)
         LOCK_DCACHE();
 #endif
         /* We're on its alias list, just remove ourselves */
-        list_del(&ip->i_dentry);
+        MDKI_IDENTRY_LIST_DEL_FIRST(ip);
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,38)
         spin_unlock(&ip->i_lock);
 #else
@@ -618,7 +657,7 @@ mdki_finish_flush_dcache(void *cookie)
     VNODE_T *vp;
     INODE_T *ip;
     mdki_boolean_t released = FALSE;
-    struct list_head *lh, *next;
+    MDKI_IDENTRY_T *cursor, *helper;
 
     if (cookie != NULL) {
         /*
@@ -648,9 +687,9 @@ mdki_finish_flush_dcache(void *cookie)
 #else
         LOCK_DCACHE();
 #endif
-        if (!list_empty(&ip->i_dentry)) {
-            list_for_each_safe(lh, next, &ip->i_dentry) {
-                dp = list_entry(lh, struct dentry, d_alias);
+        if (!MDKI_IDENTRY_LIST_EMPTY(ip)) {
+            MDKI_IDENTRY_FOR_EACH(cursor, helper, ip) {
+                dp = MDKI_IDENTRY_LIST_ENTRY(cursor);
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,38)
                 dget(dp);
                 spin_unlock(&ip->i_lock);
@@ -699,7 +738,7 @@ vnlayer_inode2dentry(
 {
     struct dentry *found = NULL;
 
-    if (list_empty(&(ip->i_dentry))) {
+    if (MDKI_IDENTRY_LIST_EMPTY(ip)) {
         if (MDKI_INOISMVFS(ip)) {
             /* don't have/need a dentry for MVFS nodes */
             MDKI_TRACE(TRACE_DCACHE, "%s: no dent for ip %p\n", __func__, ip);
@@ -765,7 +804,13 @@ vnode_d_alloc_root(
     int line
 )
 {
-    DENT_T *dent = d_alloc_root(rootip);
+    DENT_T *dent;
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,3,0)
+    dent = d_make_root(rootip);
+#else
+    dent = d_alloc_root(rootip);
+#endif
     MDKI_TRACE(TRACE_DCACHE,"d_root rip=%p dent=%p @ %s:%s:%d\n",
               rootip, dent, file, func, line);
     return dent;
@@ -837,7 +882,7 @@ vnode_d_instantiate(
     if (dent->d_inode) {
         MDKI_VFS_LOG(VFS_LOG_ERR,"%s: vp %p in dp %p!\n", __func__, ip, dent);
     }
-    if (!list_empty(&ip->i_dentry)) {
+    if (!MDKI_IDENTRY_LIST_EMPTY(ip)) {
         /* Expected for vnode ops like link, and that is the only trap
          * where I've found it so far.  Not on all the misc failures.
          */
@@ -886,4 +931,4 @@ vnlayer_dent2vfsmnt(DENT_T *dentry)
         mnt = MDKI_MNTGET(mnt);
     return(mnt);
 }
-static const char vnode_verid_mvfs_linux_dops_c[] = "$Id:  a74002fe.196a11e2.9cb5.00:01:84:c3:8a:52 $";
+static const char vnode_verid_mvfs_linux_dops_c[] = "$Id:  c862d711.e2bd11e3.8cd7.00:11:25:27:c4:b4 $";

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 1999, 2012 IBM Corporation.
+ * Copyright (C) 1999, 2014 IBM Corporation.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -53,12 +53,20 @@ vnode_fop_rdwr(
     loff_t *off_p,
     uio_rw_t dir
 );
+#if LINUX_VERSION_CODE > KERNEL_VERSION(3,10,0)
+extern int
+vnode_fop_iterate(
+    FILE_T *file_p,
+    struct dir_context *ctx
+);
+#else /* LINUX_VERSION_CODE > KERNEL_VERSION(3,10,0) */
 extern int
 vnode_fop_readdir(
     FILE_T *file_p,
     void *dirent_p,
     filldir_t filldir_func
 );
+#endif /* else LINUX_VERSION_CODE > KERNEL_VERSION(3,10,0) */
 extern unsigned int
 vnode_fop_poll(
     FILE_T *file_p,
@@ -186,7 +194,11 @@ F_OPS_T vnode_dir_file_ops = {
         .llseek =             &vnode_fop_llseek,
         /* generic_read_dir just returns EISDIR */
         .read =               &generic_read_dir,
+#if LINUX_VERSION_CODE > KERNEL_VERSION(3,10,0)
+        .iterate =            &vnode_fop_iterate,
+#else
         .readdir =            &vnode_fop_readdir,
+#endif /* LINUX_VERSION_CODE > KERNEL_VERSION(3,10,0) */
         .open =               &vnode_fop_open,
         .release =            &vnode_fop_release,
         .fsync =              &vnode_fop_fsync,
@@ -745,6 +757,49 @@ vnode_fop_mmap(
     return mdki_errno_unix_to_linux(err);
 }
 
+#if LINUX_VERSION_CODE > KERNEL_VERSION(3,10,0)
+extern int
+vnode_fop_iterate(
+    FILE_T *file_p,
+    struct dir_context *dir_ctx
+)
+{
+    uio_t uios = {0};
+    INODE_T *inode;
+    DENT_T *dentry;
+    int err;
+    CALL_DATA_T cd;
+    struct readdir_ctx ctx;
+
+    dentry = file_p->f_dentry;
+    inode = dentry->d_inode;
+
+    ASSERT(MDKI_INOISMVFS(inode));
+
+    ctx.file = file_p;
+    ctx.done = FALSE;
+
+    uios.uio_offset = dir_ctx->pos;
+    /* This value cannot be larger than value in the view_v4_procinfo table 
+     * It is used for maximum size of the return data.
+     */
+    uios.uio_resid = MVFS_LINUX_MAXRPCDATA;
+    uios.uio_buff = dir_ctx;
+    uios.uio_func = dir_ctx->actor;
+
+    mdki_linux_init_call_data(&cd);
+    err = VOP_READDIR(ITOV(inode), &uios, &cd, NULL, &ctx);
+    err = mdki_errno_unix_to_linux(err);
+    mdki_linux_destroy_call_data(&cd);
+
+    if (!ctx.done) {
+        /* reset the file position */
+        file_p->f_pos = (loff_t)uios.uio_offset;
+        dir_ctx->pos = (loff_t) uios.uio_offset;
+    }
+    return err;
+}
+#else /* LINUX_VERSION_CODE > KERNEL_VERSION(3,10,0) */
 int
 vnode_fop_readdir(
     FILE_T *file_p,
@@ -787,5 +842,6 @@ vnode_fop_readdir(
 
     return err;
 }
+#endif /* else LINUX_VERSION_CODE > KERNEL_VERSION(3,10,0) */
 
-static const char vnode_verid_mvfs_linux_fops_c[] = "$Id:  13a9f437.0c1f11e2.93ec.00:01:83:9c:f6:11 $";
+static const char vnode_verid_mvfs_linux_fops_c[] = "$Id:  c892d729.e2bd11e3.8cd7.00:11:25:27:c4:b4 $";

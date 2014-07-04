@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 1999, 2013 IBM Corporation.
+ * Copyright (C) 1999, 2014 IBM Corporation.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -28,6 +28,12 @@
 #include "mvfs_linux_shadow.h"
 #include <linux/delay.h>
 #include <linux/seq_file.h>
+
+#define MDKI_DEV_DIR "/dev"
+#define MDKI_DEV_NAME "mvfs"
+#define MDKI_DEV_PATH MDKI_DEV_DIR "/" MDKI_DEV_NAME
+#define MDKI_DEV_NAME_LEN() (sizeof(MDKI_DEV_NAME) - 1)
+
 #if defined(RATL_COMPAT32) && LINUX_VERSION_CODE < KERNEL_VERSION(2,6,24)
 /*
  * For 64-bit kernels, include the definitions for ioctl 32-bit
@@ -213,6 +219,44 @@ mdki_probe_fini(void)
     #define mdki_probe_init()
     #define mdki_probe_fini()
 #endif  /* else LINUX_VERSION_CODE > KERNEL_VERSION(2,6,38) */
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0)
+/* We used the fs periodic sync for several tasks, so we need a replacement.
+*/
+static void mdki_dw_callback(struct work_struct *work);
+
+static DECLARE_DELAYED_WORK(mdki_dw_var, mdki_dw_callback);
+
+/* declared on mvfs_mdki.h */
+extern void mfs_periodic_maintenance(CALL_DATA_T *cd);
+
+static void mdki_dw_callback(struct work_struct *work)
+{
+    CALL_DATA_T cd;
+
+    mdki_linux_init_call_data(&cd);
+    /* XXX ned a protection against a race with sync */ 
+    mfs_periodic_maintenance(&cd);
+    mdki_linux_destroy_call_data(&cd);
+    /* XXX avoid schedule if unloading */ 
+    schedule_delayed_work(&mdki_dw_var, 10 * HZ);
+}
+
+static int mdki_dw_init(void)
+{
+    schedule_delayed_work(&mdki_dw_var, 10 * HZ);
+    return 0;
+}
+
+static void mdki_dw_fini(void)
+{
+    cancel_delayed_work(&mdki_dw_var);
+}
+
+#else
+    #define mdki_dw_init() 0
+    #define mdki_dw_fini()
+#endif
 
 #ifdef MVFS_DEBUG
 #if defined(__i386__)
@@ -497,7 +541,13 @@ vnlayer_release_root_dentry(void)
 STATIC int
 vnlayer_init_root_dentry(void)
 {
-    vnlayer_sysroot_dentry = VNODE_DGET(vnlayer_get_root_dentry());
+    DENT_T *dp = vnlayer_get_root_dentry();
+
+    if (dp == NULL) {
+        printk("ERROR: Can't get a valid root dentry.\n");
+        return EINVAL;
+    }
+    vnlayer_sysroot_dentry = VNODE_DGET(dp);
     vnlayer_sysroot_mnt = vnlayer_get_root_mnt();
     if ((vnlayer_sysroot_dentry->d_parent != vnlayer_sysroot_dentry)
         || (vnlayer_sysroot_mnt->mnt_root != vnlayer_sysroot_dentry))
@@ -593,12 +643,13 @@ mdki_linux_mdep_init(void)
 
     init_waitqueue_head(&vnlayer_inactive_waitq);
     mdki_probe_init();
-    return 0;
+    return mdki_dw_init();
 }
 
 void
 mdki_linux_mdep_unload(void)
 {
+    mdki_dw_fini();
     mdki_probe_fini();
     vnlayer_release_root_dentry();
 }
@@ -677,30 +728,29 @@ vnlayer_get_view_dentry(
 
 #ifdef USE_ROOTALIAS_CURVIEW
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,38) 
 STATIC int
 vnlayer_root_alias_hash(
-    struct dentry *base,
-    struct qstr *name
-)
-#else
-STATIC int
-vnlayer_root_alias_hash(
-    const struct dentry *base,
-    const struct inode *inode,
-    struct qstr *name
-)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,38)
+    const
 #endif
+    struct dentry *base,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,38) && \
+    LINUX_VERSION_CODE < KERNEL_VERSION(3,11,0)
+    const struct inode *inode,
+#endif /* between 2.6.38 and 3.10 */
+    struct qstr *name
+)
 {
     vnlayer_root_alias_t *alias;
     ASSERT(DENT_IS_ROOT_ALIAS(base));
     alias = DENT_GET_ALIAS(base);
     ASSERT(alias->rootdentry->d_op->d_hash != NULL)
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,38) 
-    return (*alias->rootdentry->d_op->d_hash)(alias->rootdentry, name);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,38) && \
+    LINUX_VERSION_CODE < KERNEL_VERSION(3,11,0)
+    return alias->rootdentry->d_op->d_hash(alias->rootdentry, inode, name);
 #else
-    return (*alias->rootdentry->d_op->d_hash)(alias->rootdentry, inode, name);
-#endif
+    return alias->rootdentry->d_op->d_hash(alias->rootdentry, name);
+#endif /* between 2.6.38 and 3.10 */
 }
 
 STATIC struct dentry *
@@ -710,8 +760,9 @@ vnlayer_find_alias(
 )
 {
     struct dentry *found = NULL;
-    struct list_head *le;
     vnlayer_root_alias_t *alias;
+    MDKI_IDENTRY_T *cursor,
+                   *header;
 
     /*
      * Scan through the dentry aliases for the root inode, looking for an
@@ -723,9 +774,9 @@ vnlayer_find_alias(
 #else
     spin_lock(&dcache_lock);
 #endif
-    if (!list_empty(&inode->i_dentry)) {
-        list_for_each(le, &inode->i_dentry) {
-            found = list_entry(le, struct dentry, d_alias);
+    if (MDKI_IDENTRY_LIST_EMPTY(inode)) {
+        MDKI_IDENTRY_FOR_EACH(cursor, header, inode) {
+            found = MDKI_IDENTRY_LIST_ENTRY(cursor);
             if (DENT_IS_ROOT_ALIAS(found)) {
                 alias = DENT_GET_ALIAS(found);
                 if (alias->curview == viewdent) {
@@ -881,9 +932,13 @@ vnlayer_root_dop_compare(
 int
 vnlayer_root_dop_compare(
     const struct dentry *dparent,
+# if LINUX_VERSION_CODE < KERNEL_VERSION(3,11,0)
     const struct inode *iparent,
+# endif
     const struct dentry *dentry,
+# if LINUX_VERSION_CODE < KERNEL_VERSION(3,11,0)
     const struct inode *inode,
+# endif
     unsigned int tlen,
     const char *tname,
     const struct qstr *namep
@@ -957,7 +1012,10 @@ mdki_linux_proc_setview(
      */
 
     /* get current root dentry.  don't increment count.  */
-    cur_root_dent = vnlayer_get_root_dentry(); 
+    cur_root_dent = vnlayer_get_root_dentry();
+    if (cur_root_dent == NULL) {
+        return EPERM;
+    }
     rdir = cur_root_dent->d_inode;      /* don't hold */
 
     if (cur_root_dent == vnlayer_sysroot_dentry) {
@@ -997,7 +1055,7 @@ mdki_linux_get_procview(void)
 {
     DENT_T *rdent = vnlayer_get_root_dentry();
 
-    if (DENT_IS_ROOT_ALIAS(rdent)) {
+    if (rdent && DENT_IS_ROOT_ALIAS(rdent)) {
         vnlayer_root_alias_t *alias = DENT_GET_ALIAS(rdent);
         ASSERT(MDKI_INOISMVFS(alias->curview->d_inode));
         return ITOV(alias->curview->d_inode);
@@ -1025,14 +1083,16 @@ mdki_linux_proc_setview(
     /*
      * Now, do the work to set the current process view
      */
+    cur_rdir = vnlayer_get_root_dentry();  /* current root dentry.  don't increment count.  */
+    if (cur_dir == NULL) {
+        return EPERM;
+    }
+    rdir = cur_rdir->d_inode;           /* don't hold */
 
     if (vw) {
         tmp = vnlayer_get_view_dentry(viewdir, vw, viewname);
     } else
         tmp = VNODE_DGET(vnlayer_sysroot_dentry);
-
-    cur_rdir = vnlayer_get_root_dentry();  /* current root dentry.  don't increment count.  */
-    rdir = cur_rdir->d_inode;           /* don't hold */
 
     if (cur_rdir == vnlayer_sysroot_dentry) {
         /* Set over no chroot() */
@@ -1376,27 +1436,27 @@ extern int
 mdki_linux_set_vobrt_vfsmnt(const char *vpath)
 {
     int err = 0;
-    struct nameidata nd;
+    MDKI_LU_VAR nd;
     VFS_T *vfsp;
     VNODE_T *rootvp;
 
     /* path_lookup() now does all the work. */
     err = path_lookup(vpath, LOOKUP_FOLLOW, &nd);
     if (!err) {
-        if (!MDKI_SBISMVFS(MDKI_NAMEI_DENTRY(&nd)->d_sb))
+        if (!MDKI_SBISMVFS(MDKI_LU_VAR_DENTRY(&nd)->d_sb))
             err = -EINVAL;
         else {
-            vfsp = SBTOVFS(MDKI_NAMEI_DENTRY(&nd)->d_sb);
+            vfsp = SBTOVFS(MDKI_LU_VAR_DENTRY(&nd)->d_sb);
             err = VFS_ROOT(vfsp, &rootvp);
             err = mdki_errno_unix_to_linux(err);
             if (err == 0) {
                 ASSERT(!VTOVFSMNT(rootvp));
-                SET_VTOVFSMNT(rootvp, MDKI_MNTGET(MDKI_NAMEI_MNT(&nd)));
+                SET_VTOVFSMNT(rootvp, MDKI_MNTGET(MDKI_LU_VAR_MNT(&nd)));
                 VN_RELE(rootvp);
             }
         }
     }
-    MDKI_PATH_RELEASE(&nd);
+    MDKI_LU_RELEASE(&nd);
     return vnlayer_errno_linux_to_unix(err);
 }
 #endif /* else LINUX_VERSION_CODE > KERNEL_VERSION(2,6,38) */
@@ -1482,8 +1542,8 @@ mdki_linux_vattr_pullup(
     if (mask & AT_NLINK)
         set_nlink(ip, VATTR_GET_NLINK(vap));
 #endif
-    GET(uid,UID);
-    GET(gid,GID);
+    GET(uid,KUID);
+    GET(gid,KGID);
     GET(rdev,RDEV);
     GET(size,SIZE);
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,18)
@@ -1604,6 +1664,7 @@ mdki_vfs_to_dev(VFS_T *vfsp)
 extern void
 mdki_mark_vfs_dirty(VFS_T *vfsp)
 {
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,6,0)
     SUPER_T *sb;
 
     /*
@@ -1620,6 +1681,7 @@ mdki_mark_vfs_dirty(VFS_T *vfsp)
     sb = VFSTOSB(vfsp);
     sb->s_dirt = 1;
     return;
+#endif
 }
 
 extern u_long
@@ -1919,7 +1981,7 @@ vnlayer_groups_task_to_cred(
 
     cred->cr_ngroups = LINUX_TASK_NGROUPS(task);
     for (i = 0; i < cred->cr_ngroups; i++) {
-        cred->cr_groups[i] = GROUP_AT(LINUX_TASK_GROUPS(task),i);
+        cred->cr_groups[i] = MDKI_KGID_TO_GID(GROUP_AT(LINUX_TASK_GROUPS(task), i));
     }
 }
 
@@ -2219,34 +2281,29 @@ mdki_invalidate_vnode_pages(VNODE_T *vp)
 int
 mvfs_unlink_dev_file(void)
 {
-    int err = 0;
+    MDKI_LU_VAR nd;
     DENT_T *dent;
-    struct nameidata nd;
+    int err;
 
-#if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,38) 
-    err = kern_path(MVFS_DEV_FULL_PATH, LOOKUP_PARENT, &nd.path);
-#else
-    /* path_lookup() now does all the work. */
-    err = path_lookup(MVFS_DEV_FULL_PATH, LOOKUP_PARENT, &nd);
-#endif
-    if (err)
+    err = MDKI_LU_PATH(MDKI_DEV_PATH, &nd, LOOKUP_FOLLOW | LOOKUP_PARENT);
+    if (err) {
         return(err);
+    }
+    LOCK_INODE_NESTED(MDKI_LU_VAR_DENTRY(&nd)->d_inode);
 #if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,32)
-    mutex_lock_nested(&MDKI_NAMEI_DENTRY(&nd)->d_inode->i_mutex, I_MUTEX_PARENT);
-    dent = lookup_one_len(MVFS_DEV_FILE, MDKI_NAMEI_DENTRY(&nd), MVFS_DEV_FILE_LEN());
+    dent = lookup_one_len(MDKI_DEV_NAME, MDKI_LU_VAR_DENTRY(&nd), MDKI_DEV_NAME_LEN());
 #else
-    LOCK_INODE(MDKI_NAMEI_DENTRY(&nd)->d_inode);
-    dent = lookup_one_len(nd.last.name, MDKI_NAMEI_DENTRY(&nd), nd.last.len);
+    dent = lookup_one_len(nd.last.name, MDKI_LU_VAR_DENTRY(&nd), nd.last.len);
 #endif
     if (IS_ERR(dent))
         err = PTR_ERR(dent);
     if (!err) {
-        err = MDKI_VFS_UNLINK(MDKI_NAMEI_DENTRY(&nd)->d_inode, dent,
-                         MDKI_NAMEI_MNT(&nd));
+        err = MDKI_VFS_UNLINK(MDKI_LU_VAR_DENTRY(&nd)->d_inode, dent,
+                              MDKI_LU_VAR_MNT(&nd));
         VNODE_DPUT(dent);
     }
-    UNLOCK_INODE(MDKI_NAMEI_DENTRY(&nd)->d_inode);
-    MDKI_PATH_RELEASE(&nd);
+    UNLOCK_INODE(MDKI_LU_VAR_DENTRY(&nd)->d_inode);
+    MDKI_LU_RELEASE(&nd);
     return(err);
 }
 
@@ -2254,6 +2311,38 @@ int
 mvfs_make_dev_file(void)
 {
     int err = 0;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,1,0)
+    struct dentry *dent;
+    struct path path;
+
+    dent = kern_path_create(AT_FDCWD, MDKI_DEV_PATH, &path, 0);
+    if (IS_ERR(dent)) {
+        err = PTR_ERR(dent);
+        if (err == -EEXIST)
+            err = mvfs_unlink_dev_file();
+        if (err == 0) {
+            dent = kern_path_create(AT_FDCWD, MDKI_DEV_PATH, &path, 0);
+        }
+        if (IS_ERR(dent))
+            err = PTR_ERR(dent);
+    }
+    if (err == 0) {
+        err = MDKI_VFS_MKNOD(path.dentry->d_inode,
+                             dent,
+                             path.mnt,
+                             S_IFBLK | S_IRUGO,
+                             MKDEV(mvfs_major, 0));
+    }
+    if (!IS_ERR(dent)) {
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,3,0)
+        dput(dent);
+        mutex_unlock(&path.dentry->d_inode->i_mutex);
+        path_put(&path);
+#else /* LINUX_VERSION_CODE < KERNEL_VERSION(3,3,0) */
+        done_path_create(&path, dent);
+#endif /* LINUX_VERSION_CODE < KERNEL_VERSION(3,3,0) */
+    }
+#else
     DENT_T *dent;
     struct nameidata nd;
 
@@ -2295,14 +2384,14 @@ mvfs_make_dev_file(void)
     }
     UNLOCK_INODE(MDKI_NAMEI_DENTRY(&nd)->d_inode);
     MDKI_PATH_RELEASE(&nd);
+#endif
     return(err);
 }
 
 STATIC int
 vnlayer_check_types(void)
 {
-    int err = 0;
-    return err;
+    return 0;
 }
 
 /*
@@ -2492,6 +2581,12 @@ vnlayer_register_procfs(void)
     if (!proc_mkdir(MVFS_PROCFS_DIR, 0))
         return -EINVAL;
 
+# if LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0)
+    myent = proc_create(MVFS_PROCFS_DIR PROCS,
+                        S_IFREG | S_IRUSR,
+                        NULL,
+                        &setview_operations);
+#else
     myent = create_proc_entry(MVFS_PROCFS_DIR PROCS, S_IFREG | S_IRUSR, NULL);
     if (myent != NULL) {
         myent->proc_fops = &setview_operations;
@@ -2499,6 +2594,7 @@ vnlayer_register_procfs(void)
         remove_proc_entry(MVFS_PROCFS_DIR, NULL);
         return -EINVAL;
     }
+#endif
     return 0;
 }
 
@@ -2738,4 +2834,4 @@ mdki_linux_free_substitute_cred(
     KMEM_FREE(cd, sizeof(*cd));
 }
 
-static const char vnode_verid_mvfs_linux_mdki_c[] = "$Id:  c1098334.009911e3.8267.00:01:84:c3:8a:52 $";
+static const char vnode_verid_mvfs_linux_mdki_c[] = "$Id:  ca92d849.e2bd11e3.8cd7.00:11:25:27:c4:b4 $";

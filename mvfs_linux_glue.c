@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2003, 2012 IBM Corporation.
+ * Copyright (C) 2003, 2014 IBM Corporation.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -81,18 +81,18 @@ int
 vnlayer_has_mandlocks(struct inode *ip)
 {
     struct file_lock *flock;
-    int status;
+    int status = 0;
 
     if (MANDATORY_LOCK(ip) == 0) {
         return 0;
     }
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,37)
+#if LINUX_VERSION_CODE > KERNEL_VERSION(3,10,0)
+    spin_lock(&ip->i_lock);
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(2,6,37)
     lock_kernel();
 #else
     lock_flocks();
 #endif
-
-    status = 0;
     for (flock = ip->i_flock; flock != NULL; flock = flock->fl_next) {
         if ((flock->fl_flags & FL_POSIX) &&
 	    (flock->fl_owner != current->files)) {
@@ -100,7 +100,9 @@ vnlayer_has_mandlocks(struct inode *ip)
 	    break;
 	}
     }
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,37)
+#if LINUX_VERSION_CODE > KERNEL_VERSION(3,10,0)
+    spin_unlock(&ip->i_lock);
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(2,6,37)
     unlock_kernel();
 #else
     unlock_flocks();
@@ -256,4 +258,4 @@ mdki_xdr_opaque(
         return FALSE;
     }
 }
-static const char vnode_verid_mvfs_linux_glue_c[] = "$Id:  210d3794.065811e2.940a.00:01:84:c3:8a:52 $";
+static const char vnode_verid_mvfs_linux_glue_c[] = "$Id:  ca62d831.e2bd11e3.8cd7.00:11:25:27:c4:b4 $";

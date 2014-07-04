@@ -2731,8 +2731,7 @@ mvfs_attrcache(
     VFS_T *vfsp,
     view_vstat_t *vstatp,
     int expmod,     /* Indicates caller expects this modification */
-    CALL_DATA_T *cd,
-    int update_attrs
+    CALL_DATA_T *cd
 )
 {
     VNODE_T *vp;
@@ -2746,8 +2745,7 @@ mvfs_attrcache(
 
     /* If we have a vnode we can manage other cached info. */
     if ((vp = MTOV(mnp)) != NULL) {
-        if (update_attrs)  /* Sync attributes with wrapper (if any) */
-        	MVFS_WRAP_UPDATE_ATTRS(vp,cd);
+        MVFS_WRAP_UPDATE_ATTRS(vp, cd);
 
         /* Process any modified events */
         if (expmod) modflags |= MFS_EXPMOD;
@@ -5511,8 +5509,20 @@ mvfs_rename_ctx(
             break;
         case MFS_VIEWCLAS:
         case MFS_LOOPCLAS:	/* Pass on to real vnode */
-            error = MVOP_RENAME(MFS_REALVP(odvp),onm,MFS_REALVP(tdvp),tnm,
-                                cd,ctxp);
+          /* Make sure the target is actually something we can use.  For
+          ** instance, if it is a MFS_VIEWDIRCLAS mnode it might not have a
+          ** realvp, so don't even try.
+          */
+          if (MFS_REALVP(tdvp) == NULL) {
+              mvfs_log(MFS_LOG_WARN,
+                       "mvfs_rename_ctx: tdvp=%p realvp=NULL mclass=%d.\n",
+                       tdvp, VTOM(tdvp)->mn_hdr.mclass);
+              error = EXDEV;
+              break;
+          }
+          error = MVOP_RENAME(MFS_REALVP(odvp), onm,
+                              MFS_REALVP(tdvp), tnm,
+                              cd, ctxp);
             break;
         case MFS_NTVWCLAS:
         case MFS_VIEWDIRCLAS:
@@ -5529,10 +5539,24 @@ mvfs_rename_ctx(
 
             if (MFS_ISVOBRT(VTOM(tdvp))) {
                 tdvp = mfs_bindroot(tdvp, cd, &error);
-                if (error == ESRCH) error = EROFS;    /* Null view -> RO FS */
-                if (error) break;
+                if (error == ESRCH) {
+                    error = EROFS;    /* Null view -> RO FS */
+                }
+                if (error) {
+                    break;
+                }
+            } else if (!MFS_ISVOB(VTOM(tdvp))) {
+                /* The target dir is some type that we don't allow to be renamed
+                ** since it doesn't really make sense.
+                */
+                mvfs_log(MFS_LOG_WARN,
+                         "mvfs_rename_ctx: tdvp=%p mclass=%d.\n",
+                         tdvp, VTOM(tdvp)->mn_hdr.mclass);
+                error = EXDEV;
+                break;
+            } else {
+                /* The target dir is either a VOB or VOBRT so we're good. */
             }
-
             /* Must make sure that the two dirs are the same view */
         
             if (MFS_VIEW(odvp) != MFS_VIEW(tdvp)) {
@@ -7645,4 +7669,4 @@ mvfs_devadjust(dev_t dev, VNODE_T *vp)
 
 }
 
-static const char vnode_verid_mvfs_vnodeops_c[] = "$Id:  cce559c0.7d4911e3.81b9.44:37:e6:71:2b:ed $";
+static const char vnode_verid_mvfs_vnodeops_c[] = "$Id:  ed63b41b.d7ac11e3.96f2.44:37:e6:71:22:3b $";

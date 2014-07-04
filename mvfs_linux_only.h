@@ -1,7 +1,7 @@
 #ifndef MVFS_LINUX_ONLY_H_
 #define MVFS_LINUX_ONLY_H_
 /*
- * Copyright (C) 1999, 2013 IBM Corporation.
+ * Copyright (C) 1999, 2014 IBM Corporation.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -38,6 +38,11 @@
  */
 #define LOCK_INODE(inode) mutex_lock(&(inode)->i_mutex)
 #define UNLOCK_INODE(inode) mutex_unlock(&(inode)->i_mutex)
+#if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,32)
+# define LOCK_INODE_NESTED(inode) mutex_lock_nested(&(inode)->i_mutex, I_MUTEX_PARENT)
+#else /* LINUX_VERSION_CODE > KERNEL_VERSION(2,6,32) */
+# define LOCK_INODE_NESTED(inode) LOCK_INODE(inode)
+#endif /* LINUX_VERSION_CODE > KERNEL_VERSION(2,6,32) */
 
 #if !defined(USE_CHROOT_CURVIEW) && !defined(USE_ROOTALIAS_CURVIEW)
 #define USE_ROOTALIAS_CURVIEW
@@ -217,16 +222,13 @@ extern IN_OPS_T vnlayer_clrvnode_iops;
 # define MDKI_PATH_RELEASE(ND) path_release(ND)
 #endif
 
-/* Both path_walk and vfs_path_lookup have a bogus interface.
-** They release the nameidata on errors but not on success.
-*/
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,24)
-# define MDKI_PATH_WALK(p, n) path_walk(p, n)
-#elif LINUX_VERSION_CODE < KERNEL_VERSION(3,1,0)
-# define MDKI_PATH_WALK(p, n) vfs_path_lookup(MDKI_NAMEI_DENTRY(n), MDKI_NAMEI_MNT(n), p, 0, n)
-#else
-# define MDKI_PATH_WALK(p, n) vfs_path_lookup(MDKI_NAMEI_DENTRY(n), MDKI_NAMEI_MNT(n), p, 0, &((n)->path))
-#endif
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,8,0)
+# define MDKI_LOCK_SB(SB)
+# define MDKI_UNLOCK_SB(SB)
+#else /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,8,0) */
+# define MDKI_LOCK_SB(SB) lock_super(SB)
+# define MDKI_UNLOCK_SB(SB) unlock_super(SB)
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,8,0) */
 
 extern DENT_T *
 vnlayer_inode2dentry(
@@ -310,7 +312,11 @@ vnode_d_instantiate(
 #else
 #define VNODE_DGET(dent) dget(dent)
 #define VNODE_DPUT(dent) dput(dent)
-#define VNODE_D_ALLOC_ROOT(vp) d_alloc_root(vp)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,3,0)
+# define VNODE_D_ALLOC_ROOT(vp) d_make_root(vp)
+#else
+# define VNODE_D_ALLOC_ROOT(vp) d_alloc_root(vp)
+#endif
 #define VNODE_D_ALLOC(parent,name) d_alloc(parent, name)
 #define VNODE_D_ADD(dent,ino) d_add(dent,ino)
 #define VNODE_D_SPLICE_ALIAS(ino,dent) d_splice_alias(ino,dent)
@@ -384,11 +390,13 @@ vnlayer_get_ucdir_inode(void);
 #endif
 #define F_COUNT(x) file_count(x)
 #define F_COUNT_INC(x) get_file(x)
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,38)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,11,0)
+# define D_COUNT(x) d_count(x)
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,38) /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,11,0) */
 # define D_COUNT(x) ((x) ? *(volatile unsigned int *)&((x)->d_count) : 0)
-#else
+#else /* LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,38) */
 # define D_COUNT(x) ((x) ? atomic_read(&(x)->d_count) : 0)
-#endif /* else LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,38) */
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,38) */
 #define I_WRITECOUNT(x) atomic_read(&(x)->i_writecount)
 #define I_WRITECOUNT_DEC(x) atomic_dec(&(x)->i_writecount)
 #define I_WRITECOUNT_INC(x) atomic_inc(&(x)->i_writecount)
@@ -827,7 +835,11 @@ extern DENT_T *
 vnlayer_hijacked_lookup(
     INODE_T *dir,
     struct dentry *dent,
-    struct nameidata *nd
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0)
+    unsigned int n
+#else
+    struct nameidata *n
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0) */
 );
 #endif /* USE_ROOTALIAS_CURVIEW */
 extern int
@@ -885,6 +897,76 @@ mvfs_linux_xdr_putbytes(
     return TRUE;
 }
 
+#if LINUX_VERSION_CODE > KERNEL_VERSION(3,6,0)
+/* getname is exported, but putname is not, so I had
+ * to implement my own pair of user-to-kernel conversion.
+ * It means you can't mix mdki_{put,get}name with {put,get}name.
+ * Finally, audit_{put,get}name are not called.
+ */
+static __inline__ void mdki_putname(struct filename *name)
+{
+    if (name->separate) {
+        /* both the struct and the pointer in only one kmalloc */
+        kfree(name);
+    }
+#if defined(__getname) && defined(__putname)
+    else {
+        __putname(name);
+    }
+#endif
+}
+
+static  __inline__ struct filename *mdki_getname(const char __user *upn)
+{
+    struct filename *fn = NULL;
+    int error = 0;
+    int len;
+
+    /* PATH_MAX includes the '\0'. See namei.c. */
+    /* strnlen_user counts the '\0' */
+    len = strnlen_user(upn, PATH_MAX);
+    /* 0 means fault */
+    if (len == 0) {
+        error = -EFAULT;
+        goto out;
+    }
+    /* Empty means ENOENT. */
+    if (len == 1) {
+        error = -ENOENT;
+        goto out;
+    }
+    if (len > PATH_MAX) {
+        error = -ENAMETOOLONG;
+        goto out;
+    }
+#if defined(__getname) && defined(__putname)
+    if (len < (PATH_MAX - sizeof(*fn))) {
+        fn = __getname();
+        if (fn != NULL)
+            fn->separate = 0;
+    }
+    if (fn == NULL)
+#endif
+    {
+        fn = kmalloc(sizeof(*fn) + len, GFP_KERNEL);
+        if (fn == NULL) {
+            error = -ENOMEM;
+            goto out;
+        }
+        fn->separate = 1;
+    }
+    fn->name = (char *) fn + sizeof(*fn);
+    fn->uptr = upn;
+    copy_from_user((void *) fn->name, fn->uptr, len);
+out:
+    if (error == 0)
+        return fn;
+    if (fn != NULL)
+        mdki_putname(fn);
+    return ERR_PTR(error);
+}
+#endif /* LINUX_VERSION_CODE > KERNEL_VERSION(3,6,0) */
+
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,18) || defined(SLES10SP2)
 /*
  * This struct is being used to add the posix lock owner on close
@@ -917,42 +999,140 @@ typedef struct mdki_vop_close_ctx {
 # define INLINE_FOR_SMALL_STACK STATIC
 #endif /* s390 */
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,27)
-# define MDKI_NAMEI_DENTRY(NI)          ((NI)->dentry)
-# define MDKI_NAMEI_MNT(NI)             ((NI)->mnt)
-# define MDKI_NAMEI_SET_DENTRY(NI, D)   ((NI)->dentry = D)
-# define MDKI_NAMEI_SET_MNT(NI, M)      ((NI)->mnt = M)
-
-# define MDKI_FS_ROOTDENTRY(F)          ((F)->root)
-# define MDKI_FS_ROOTMNT(F)             ((F)->rootmnt)
-# define MDKI_FS_SET_ROOTDENTRY(F, D)   ((F)->root = D)
-# define MDKI_FS_SET_ROOTMNT(F, M)      ((F)->rootmnt = M)
-
-# define MDKI_FS_PWDDENTRY(F)           ((F)->pwd)
-# define MDKI_FS_PWDMNT(F)              ((F)->pwdmnt)
-# define MDKI_FS_SET_PWDDENTRY(F, D)    ((F)->pwd = D)
-# define MDKI_FS_SET_PWDMNT(F, M)       ((F)->pwdmnt = M)
-
+#if LINUX_VERSION_CODE > KERNEL_VERSION(3,6,0)
+/* getname is exported, but putname is not.
+ * mdki_putname is *not* the same as
+ * putname. So, do not call getname and then mdki_putname.
+ * The following macros will help.
+ */ 
+# define MDKI_GETNAME(X) mdki_getname(X)
+# define MDKI_PUTNAME(X) mdki_putname(X)
 #else
+# define MDKI_GETNAME(X) getname(X)
+# define MDKI_PUTNAME(X) putname(X)
+#endif
+
+#if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,38)
+# define MDKI_NAMEI_PATH(P, ND, F) kern_path(P, F, &(ND)->path)
+#else
+# define MDKI_NAMEI_PATH(P, ND, F) path_lookup(P, F, ND)
+#endif
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,27)
+# define MDKI_NAMEI_DENTRY(NI)            ((NI)->dentry)
+# define MDKI_NAMEI_MNT(NI)               ((NI)->mnt)
+# define MDKI_NAMEI_SET_DENTRY(NI, D)     ((NI)->dentry = (D))
+# define MDKI_NAMEI_SET_MNT(NI, M)        ((NI)->mnt = (M))
+# define MDKI_PATH_RELEASE(ND)            path_release(ND)
+#else /* LINUX_VERSION_CODE < KERNEL_VERSION(2,6,27) || LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,38) */
+# define MDKI_NAMEI_DENTRY(NI)            ((NI)->path.dentry)
+# define MDKI_NAMEI_MNT(NI)               ((NI)->path.mnt)
+# define MDKI_NAMEI_SET_DENTRY(NI, D)     ((NI)->path.dentry = (D))
+# define MDKI_NAMEI_SET_MNT(NI, M)        ((NI)->path.mnt = (M))
+# define MDKI_PATH_RELEASE(ND)            path_put(&(ND)->path)
+#endif
+
 /*
- * For 2.6.27 and beyond they added a 'struct path' because 
- * mnt and dentry are almost always handled in pairs.
+ * Read/set the embedded dentry and path
+ * according to the type of struct used by
+ * the lookup function.
  */
-# define MDKI_NAMEI_DENTRY(NI)          ((NI)->path.dentry)
-# define MDKI_NAMEI_MNT(NI)             ((NI)->path.mnt)
-# define MDKI_NAMEI_SET_DENTRY(NI, D)   ((NI)->path.dentry = D)
-# define MDKI_NAMEI_SET_MNT(NI, M)      ((NI)->path.mnt = M)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,27) || LINUX_VERSION_CODE > KERNEL_VERSION(2,6,38)
+# define MDKI_LU_VAR_DENTRY(NI)           ((NI)->dentry)
+# define MDKI_LU_VAR_MNT(NI)              ((NI)->mnt)
+# define MDKI_LU_VAR_SET_DENTRY(NI, D)    ((NI)->dentry = (D))
+# define MDKI_LU_VAR_SET_MNT(NI, M)       ((NI)->mnt = (M))
+#else /* LINUX_VERSION_CODE < KERNEL_VERSION(2,6,27) || LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,38) */
+# define MDKI_LU_VAR_DENTRY(NI)           ((NI)->path.dentry)
+# define MDKI_LU_VAR_MNT(NI)              ((NI)->path.mnt)
+# define MDKI_LU_VAR_SET_DENTRY(NI, D)    ((NI)->path.dentry = (D))
+# define MDKI_LU_VAR_SET_MNT(NI, M)       ((NI)->path.mnt = (M))
+#endif /* LINUX_VERSION_CODE < KERNEL_VERSION(2,6,27) || LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,38) */
 
-# define MDKI_FS_ROOTDENTRY(F)          ((F)->root.dentry)
-# define MDKI_FS_ROOTMNT(F)             ((F)->root.mnt)
-# define MDKI_FS_SET_ROOTDENTRY(F, D)   ((F)->root.dentry = D)
-# define MDKI_FS_SET_ROOTMNT(F, M)      ((F)->root.mnt = M)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,27)
+# define MDKI_FS_ROOTDENTRY(F)            ((F)->root)
+# define MDKI_FS_ROOTMNT(F)               ((F)->rootmnt)
+# define MDKI_FS_SET_ROOTDENTRY(F, D)     ((F)->root = (D))
+# define MDKI_FS_SET_ROOTMNT(F, M)        ((F)->rootmnt = (M))
+# define MDKI_FS_PWDDENTRY(F)             ((F)->pwd)
+# define MDKI_FS_PWDMNT(F)                ((F)->pwdmnt)
+# define MDKI_FS_SET_PWDDENTRY(F, D)      ((F)->pwd = (D))
+# define MDKI_FS_SET_PWDMNT(F, M)         ((F)->pwdmnt = (M))
 
-# define MDKI_FS_PWDDENTRY(F)           ((F)->pwd.dentry)
-# define MDKI_FS_PWDMNT(F)              ((F)->pwd.mnt)
-# define MDKI_FS_SET_PWDDENTRY(F, D)    ((F)->pwd.dentry = D)
-# define MDKI_FS_SET_PWDMNT(F, M)       ((F)->pwd.mnt = M)
+# define MDKI_FS_VFSMNT(F)                ((F)->f_vfsmnt)
+# define MDKI_FS_SET_VFSMNT(F, M)         ((F)->f_vfsmnt = (M))
+#else /* LINUX_VERSION_CODE < KERNEL_VERSION(2,6,27) */
+# define MDKI_FS_ROOTDENTRY(F)            ((F)->root.dentry)
+# define MDKI_FS_ROOTMNT(F)               ((F)->root.mnt)
+# define MDKI_FS_SET_ROOTDENTRY(F, D)     ((F)->root.dentry = (D))
+# define MDKI_FS_SET_ROOTMNT(F, M)        ((F)->root.mnt = (M))
+# define MDKI_FS_PWDDENTRY(F)             ((F)->pwd.dentry)
+# define MDKI_FS_PWDMNT(F)                ((F)->pwd.mnt)
+# define MDKI_FS_SET_PWDDENTRY(F, D)      ((F)->pwd.dentry = (D))
+# define MDKI_FS_SET_PWDMNT(F, M)         ((F)->pwd.mnt = (M))
+# define MDKI_FS_SET_VFSMNT(F, M)         ((F)->f_path.mnt = (M))
+# define MDKI_FS_VFSMNT(F)                ((F)->f_path.mnt)
 #endif /* LINUX_VERSION_CODE < KERNEL_VERSION(2,6,27) */
+
+/* The following set of of macros helps to keep the code clean,
+ * dealing with all the lookup changes over time.
+ *
+ * path_walk/kern_path/vfs_path_lookup have a bogus interface.
+ * They release the nameidata/path on errors but not on success.
+ *
+ */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,24)
+# define MDKI_LU_VAR struct nameidata
+# define MDKI_LU_WALK(P, N, F) ({(N)->flags = (F); path_walk((P), (N));})
+# define MDKI_LU_RELEASE(N) path_release(N)
+# define MDKI_LU_WALK_FROM(P, N, F) MDKI_LU_WALK(P, N, F)
+# define MDKI_LU_PATH(P, N, F) path_lookup(P, F, N)
+#elif LINUX_VERSION_CODE > KERNEL_VERSION(2,6,38) /* LINUX_VERSION_CODE < KERNEL_VERSION(2,6,24) */
+# define MDKI_LU_VAR struct path
+# define MDKI_LU_WALK(P, N, F) kern_path(P, F, N)
+# define MDKI_LU_RELEASE(N) path_put(N)
+# if LINUX_VERSION_CODE < KERNEL_VERSION(3,1,0)
+    /* vfs_path_lookup wants nameidata, but I have only a struct path */
+#   define MDKI_LU_WALK_FROM(P, N, F) ({int __result;\
+                                       struct nameidata *__nidp;\
+                                       __nidp = KMEM_ALLOC(sizeof(*__nidp), KM_SLEEP);\
+                                       if (__nidp != NULL) {\
+                                           __nidp->flags = (F);\
+                                           __result = vfs_path_lookup(MDKI_LU_VAR_DENTRY(N), MDKI_LU_VAR_MNT(N), P, F, __nidp);\
+                                           *(N) = __nidp->path;\
+                                       } else __result = -ENOMEM;\
+                                       if (__nidp != NULL) KMEM_FREE(__nidp, sizeof(*__nidp));\
+                                       __result;\
+                                      })
+# else /* LINUX_VERSION_CODE < KERNEL_VERSION(3,1,0) */
+#   define MDKI_LU_WALK_FROM(P, N, F) vfs_path_lookup(MDKI_LU_VAR_DENTRY(N), MDKI_LU_VAR_MNT(N), P, F, N)
+# endif /* LINUX_VERSION_CODE < KERNEL_VERSION(3,1,0) */
+# define MDKI_LU_PATH(P, N, F) MDKI_LU_WALK(P, N, F)
+#else /* LINUX_VERSION_CODE < KERNEL_VERSION(2,6,24) */
+# define MDKI_LU_VAR struct nameidata
+# define MDKI_LU_WALK(P, N, F) path_lookup(P, F, N)
+# define MDKI_LU_RELEASE(N) path_put(&(N)->path)
+/* using GCC's "statement expression" extension */
+# define MDKI_LU_WALK_FROM(P, N, F) ({(N)->flags = (F);\
+                                vfs_path_lookup(MDKI_LU_VAR_DENTRY(N), MDKI_LU_VAR_MNT(N), P, F, N);\
+                                })
+# define MDKI_LU_PATH(P, N, F) MDKI_LU_WALK(P, N, F)
+#endif /* LINUX_VERSION_CODE < KERNEL_VERSION(2,6,24) */
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,12,0)
+/*
+ * This kernel function is exported, its header used to appear
+ * in namei.h, but as of 3.12 it was moved to internal.h, so it
+ * needs to be redeclared.
+ */
+extern int
+vfs_path_lookup(
+    struct dentry *,
+    struct vfsmount *,
+    const char *,
+    unsigned int,
+    struct path *);
+#endif
 
 /* 
  * MDKI_FS_LOCK_R/MDKI_FS_UNLOCK_R must be used in pairs,
@@ -1000,14 +1180,28 @@ typedef struct mdki_vop_close_ctx {
 # define MDKI_VFS_RMDIR(P, D, MNT) vfs_rmdir(P, D, MNT)
 # define MDKI_VFS_RENAME(OI, OD, OMNT, NI, ND, NMNT) vfs_rename(OI, OD, OMNT, NI, ND, NMNT)
 # define MDKI_NOTIFY_CHANGE(D, M, I) notify_change(D, M, I)
+# define MDKI_VFS_GET_ATTR(M, D, K) vfs_getattr((M), (D), (K))
 #else
 /* SLES10, SLES11SP1, RHEL5, RHEL5-MRG, RHEL6, Ubuntu 12.04 */
 # define MDKI_VFS_MKNOD(P, D, MNT, M, DEV) vfs_mknod(P, D, M, DEV)
-# define MDKI_VFS_UNLINK(RDIR, RDENT, MNT) vfs_unlink(RDIR, RDENT)
 # define MDKI_VFS_MKDIR(P, D, MNT, MODE) vfs_mkdir(P, D, MODE)
 # define MDKI_VFS_RMDIR(P, D, MNT) vfs_rmdir(P, D)
-# define MDKI_VFS_RENAME(OI, OD, OMNT, NI, ND, NMNT) vfs_rename(OI, OD, NI, ND)
-# define MDKI_NOTIFY_CHANGE(D, M, I) notify_change(D, I)
+# if LINUX_VERSION_CODE >= KERNEL_VERSION(3,13,0)
+    /* I'm not handling the delegated inode case */
+#   define MDKI_VFS_UNLINK(RDIR, RDENT, MNT) vfs_unlink(RDIR, RDENT, NULL)
+#   define MDKI_VFS_RENAME(OI, OD, OMNT, NI, ND, NMNT) vfs_rename(OI, OD, NI, ND, NULL)
+#   define MDKI_NOTIFY_CHANGE(D, M, I) notify_change(D, I, NULL)
+    /* using GCC's "statement expression" extension */
+#   define MDKI_VFS_GET_ATTR(M, D, K) ({\
+                             struct path p = {mnt: (M), dentry: (D)};\
+                             vfs_getattr(&p, (K));\
+                             })
+# else
+#   define MDKI_VFS_UNLINK(RDIR, RDENT, MNT) vfs_unlink(RDIR, RDENT)
+#   define MDKI_VFS_RENAME(OI, OD, OMNT, NI, ND, NMNT) vfs_rename(OI, OD, NI, ND)
+#   define MDKI_NOTIFY_CHANGE(D, M, I) notify_change(D, I)
+#   define MDKI_VFS_GET_ATTR(M, D, K) vfs_getattr((M), (D), (K))
+# endif
 #endif
 
 #if defined(SLES10SP2) 
@@ -1033,4 +1227,4 @@ typedef struct mdki_vop_close_ctx {
 #define STACK_CHECK()
 
 #endif /* MVFS_LINUX_ONLY_H_ */
-/* $Id: c00982bc.009911e3.8267.00:01:84:c3:8a:52 $ */
+/* $Id: c922d771.e2bd11e3.8cd7.00:11:25:27:c4:b4 $ */

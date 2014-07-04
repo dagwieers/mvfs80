@@ -1,7 +1,7 @@
 #ifndef MVFS_MDKI_H_
 #define MVFS_MDKI_H_
 /*
- * Copyright (C) 1999, 2013 IBM Corporation.
+ * Copyright (C) 1999, 2014 IBM Corporation.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -119,6 +119,12 @@ struct mvfs_linux_vattr;                 /* forward decl */
 
 #define AT_NOSET        (AT_NLINK|AT_FSID|AT_NODEID|AT_TYPE|AT_BLKSIZE|AT_NBLOCKS)
 
+/* convenience macros to accomodate new k[ug]id representation */
+#define AT_KUID         AT_UID
+#define AT_KGID         AT_GID
+#define ATTR_KUID       ATTR_UID
+#define ATTR_KGID       ATTR_GID
+
 #define VATTR_NULL(vap)                 BZERO((vap), sizeof *(vap))
 #define VATTR_GET_MASK(vap)		((vap)->va_mask)
 #define VATTR_SET_MASK(vap, mask)	(vap)->va_mask = (mask)
@@ -133,7 +139,26 @@ struct mvfs_linux_vattr;                 /* forward decl */
 #define VATTR_GET_UID(vap)		((vap)->va_uid)
 #define VATTR_SET_UID(vap, u)		(vap)->va_uid = (VATTR_UID_T)(u)
 #define VATTR_GET_GID(vap)		((vap)->va_gid)
-#define VATTR_SET_GID(vap, gid)		(vap)->va_gid = (VATTR_GID_T)(gid)
+#define VATTR_SET_GID(vap, gid)	(vap)->va_gid = (VATTR_GID_T)(gid)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
+# define MDKI_KUID_TO_UID(ku)		from_kuid(&init_user_ns, (ku))
+# define MDKI_UID_TO_KUID(u)            make_kuid(&init_user_ns, (u))
+# define MDKI_KGID_TO_GID(kg)		from_kgid(&init_user_ns, (kg))
+# define MDKI_GID_TO_KGID(g)            make_kgid(&init_user_ns, (g))
+# define VATTR_GET_KUID(vap)		MDKI_UID_TO_KUID((vap)->va_uid)
+# define VATTR_SET_KUID(vap, u)		(vap)->va_uid = MDKI_KUID_TO_UID(u)
+# define VATTR_GET_KGID(vap)		MDKI_GID_TO_KGID((vap)->va_gid)
+# define VATTR_SET_KGID(vap, gid)	(vap)->va_gid = MDKI_KGID_TO_GID(gid)
+#else /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0) */
+# define MDKI_KUID_TO_UID(ku)		(ku)
+# define MDKI_UID_TO_KUID(u)            (u)
+# define MDKI_KGID_TO_GID(kg)		(kg)
+# define MDKI_GID_TO_KGID(g)            (g)
+# define VATTR_GET_KUID(vap)		VATTR_GET_UID(vap)
+# define VATTR_SET_KUID(vap, u)		VATTR_SET_UID(vap, u)
+# define VATTR_GET_KGID(vap)		VATTR_GET_GID(vap)
+# define VATTR_SET_KGID(vap, gid)	VATTR_SET_GID(vap, gid)
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0) */
 #define VATTR_GET_FSID(vap)		((vap)->va_fsid)
 #define VATTR_SET_FSID(vap, fsidp)	(vap)->va_fsid = *(fsidp)
 #define VATTR_GET_NODEID(vap)		((vap)->va_nodeid)
@@ -941,24 +966,32 @@ mdki_getmycallerscaller(void);
 #endif
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,32)
-# define MDKI_GET_CURRENT_FSUID() current->fsuid
-# define MDKI_GET_CURRENT_FSGID() current->fsgid
-# define MDKI_GET_CURRENT_EUID()  current->euid
-# define MDKI_GET_CURRENT_EGID()  current->egid
-# define MDKI_GET_CURRENT_UID()   current->uid
-# define MDKI_GET_CURRENT_GID()   current->gid
-# define MDKI_GET_CURRENT_SUID()  current->suid
-# define MDKI_GET_CURRENT_SGID()  current->sgid
-#else
-# define MDKI_GET_CURRENT_FSUID() current_fsuid()
-# define MDKI_GET_CURRENT_FSGID() current_fsgid()
-# define MDKI_GET_CURRENT_EUID()  current_euid()
-# define MDKI_GET_CURRENT_EGID()  current_egid()
-# define MDKI_GET_CURRENT_UID()   current_uid()
-# define MDKI_GET_CURRENT_GID()   current_gid()
-# define MDKI_GET_CURRENT_SUID()  current_suid()
-# define MDKI_GET_CURRENT_SGID()  current_sgid()
-#endif
+# define MDKI_GET_CURRENT_FSKUID()   (current->fsuid)
+# define MDKI_GET_CURRENT_FSKGID()   (current->fsgid)
+# define MDKI_GET_CURRENT_EKUID()    (current->euid)
+# define MDKI_GET_CURRENT_EKGID()    (current->egid)
+# define MDKI_GET_CURRENT_KUID()     (current->uid)
+# define MDKI_GET_CURRENT_KGID()     (current->gid)
+# define MDKI_GET_CURRENT_SKUID()    (current->suid)
+# define MDKI_GET_CURRENT_SKGID()    (current->sgid)
+#else /* LINUX_VERSION_CODE < KERNEL_VERSION(2,6,32) */
+# define MDKI_GET_CURRENT_FSKUID()   (current_fsuid())
+# define MDKI_GET_CURRENT_FSKGID()   (current_fsgid())
+# define MDKI_GET_CURRENT_EKUID()    (current_euid())
+# define MDKI_GET_CURRENT_EKGID()    (current_egid())
+# define MDKI_GET_CURRENT_KUID()     (current_uid())
+# define MDKI_GET_CURRENT_KGID()     (current_gid())
+# define MDKI_GET_CURRENT_SKUID()    (current_suid())
+# define MDKI_GET_CURRENT_SKGID()    (current_sgid())
+#endif /* LINUX_VERSION_CODE < KERNEL_VERSION(2,6,32) */
+#define MDKI_GET_CURRENT_FSUID()     MDKI_KUID_TO_UID(MDKI_GET_CURRENT_FSKUID())
+#define MDKI_GET_CURRENT_FSGID()     MDKI_KGID_TO_GID(MDKI_GET_CURRENT_FSKGID())
+#define MDKI_GET_CURRENT_EUID()      MDKI_KUID_TO_UID(MDKI_GET_CURRENT_EKUID())
+#define MDKI_GET_CURRENT_EGID()      MDKI_KGID_TO_GID(MDKI_GET_CURRENT_EKGID())
+#define MDKI_GET_CURRENT_UID()       MDKI_KUID_TO_UID(MDKI_GET_CURRENT_KUID())
+#define MDKI_GET_CURRENT_GID()       MDKI_KGID_TO_GID(MDKI_GET_CURRENT_KGID())
+#define MDKI_GET_CURRENT_SUID()      MDKI_KUID_TO_UID(MDKI_GET_CURRENT_SKUID())
+#define MDKI_GET_CURRENT_SGID()      MDKI_KGID_TO_GID(MDKI_GET_CURRENT_SKGID())
             
 #if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,32)
 /*
@@ -1509,5 +1542,23 @@ extern u_int mvfs_view_shift_bits;
 #define MDKI_FATAL_SIGNAL_PENDING() fatal_signal_pending(current)
 #endif
 
+#if LINUX_VERSION_CODE > KERNEL_VERSION(3,6,0)
+# define MDKI_IDENTRY_T struct hlist_node
+# define MDKI_IDENTRY_HEAD(INODE) ((INODE)->i_dentry.first)
+# define MDKI_IDENTRY_LIST_ENTRY(L) hlist_entry((L), struct dentry, d_alias)
+# define MDKI_IDENTRY_LIST_DEL_FIRST(INODE) hlist_del((INODE)->i_dentry.first)
+# define MDKI_IDENTRY_LIST_EMPTY(INODE) hlist_empty(&(INODE)->i_dentry)
+# define MDKI_IDENTRY_FOR_EACH(CURSOR, HELPER, INODE) hlist_for_each_safe((CURSOR), (HELPER), &(INODE)->i_dentry)
+# define MDKI_IDENTRY_ENTRY(CURSOR) hlist_entry((CURSOR), struct dentry, d_alias)
+#else /* LINUX_VERSION_CODE > KERNEL_VERSION(3,6,0) */
+# define MDKI_IDENTRY_T struct list_head
+# define MDKI_IDENTRY_HEAD(INODE) ((INODE)->i_dentry.next)
+# define MDKI_IDENTRY_LIST_ENTRY(L) list_entry((L), struct dentry, d_alias)
+# define MDKI_IDENTRY_LIST_DEL_FIRST(INODE) list_del(&(INODE)->i_dentry)
+# define MDKI_IDENTRY_LIST_EMPTY(INODE) list_empty(&(INODE)->i_dentry)
+# define MDKI_IDENTRY_FOR_EACH(CURSOR, HELPER, INODE) list_for_each_safe((CURSOR), (HELPER), &(INODE)->i_dentry)
+# define MDKI_IDENTRY_ENTRY(CURSOR) list_entry((CURSOR), struct dentry, d_alias)
+#endif /* LINUX_VERSION_CODE > KERNEL_VERSION(3,6,0) */
+
 #endif /* MVFS_MDKI_H_ */
-/* $Id: 925555e2.46fd11e3.8592.00:01:84:c3:8a:52 $ */
+/* $Id: c9f2d7e9.e2bd11e3.8cd7.00:11:25:27:c4:b4 $ */

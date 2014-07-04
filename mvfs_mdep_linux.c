@@ -1,4 +1,4 @@
-/* * (C) Copyright IBM Corporation 1999, 2013. */
+/* * (C) Copyright IBM Corporation 1999, 2014. */
 /*
  This program is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License as published by
@@ -619,8 +619,8 @@ retry:
              * mode at least.
              */
             ip->i_atime = ip->i_mtime = ip->i_ctime = CURRENT_TIME;
-            ip->i_uid = MDKI_GET_CURRENT_FSUID();
-            ip->i_gid = MDKI_GET_CURRENT_FSGID();
+            ip->i_uid = MDKI_GET_CURRENT_FSKUID();
+            ip->i_gid = MDKI_GET_CURRENT_FSKGID();
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,18)
             ip->i_blksize = VFSTOSB(vfsp)->s_blocksize;
 #else
@@ -1956,7 +1956,11 @@ static struct rpc_version view_version_4 = {
  * to by an element here with the right version # within?
  * (see linux/net/sunrpc/clnt.c:rpc_create_client().  sigh).
  */
-static struct rpc_version *view_versions[] = {
+static
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,4,0) 
+const
+#endif
+struct rpc_version *view_versions[] = {
     NULL,
     NULL,
     NULL,
@@ -2066,7 +2070,11 @@ static struct rpc_version albd_version_3 = {
  * to by an element here with the right version # within?
  * (see linux/net/sunrpc/clnt.c:rpc_create_client().  sigh).
  */
-static struct rpc_version *albd_versions[] = {
+static
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,4,0) 
+const
+#endif
+struct rpc_version *albd_versions[] = {
     NULL,
     NULL,
     NULL,
@@ -2297,7 +2305,9 @@ mvfs_linux_vnprint(VNODE_T *vp)
         VOP_PRINT(mnp->mn_hdr.realvp);
 }
 
+#ifdef MVFS_DEBUG
 mdki_boolean_t mvfs_linux_sync_print_vnodes = FALSE;
+#endif
 
 int
 mvfs_linux_vsync_wrapper(
@@ -2535,4 +2545,4 @@ mvfs_linux_prod_parent_dir_cache(
     return error;
 }
 
-static const char vnode_verid_mvfs_mdep_linux_c[] = "$Id:  8b855252.46fd11e3.8592.00:01:84:c3:8a:52 $";
+static const char vnode_verid_mvfs_mdep_linux_c[] = "$Id:  c832d6f9.e2bd11e3.8cd7.00:11:25:27:c4:b4 $";

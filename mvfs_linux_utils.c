@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 1999, 2013 IBM Corporation.
+ * Copyright (C) 1999, 2014 IBM Corporation.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -178,7 +178,7 @@ inline int vnlayer_cmp_cred2grp(
     if ((cr->cr_ngroups == 0) || (cr->cr_ngroups != grp->ngroups))
         return 1;    
     for (i = 0; i < cr->cr_ngroups; i++) {
-        if (cr->cr_groups[i] != GROUP_AT(grp, i))
+        if (cr->cr_groups[i] != MDKI_KGID_TO_GID(GROUP_AT(grp, i)))
             return 1;
     }
     return 0;
@@ -205,8 +205,7 @@ vnlayer_fsuid_save(
 )
 {
     mdki_boolean_t rv = FALSE;  /* Assume failure. */
-    int my_ngroups, i;
-    gid_t *my_groups;
+    int i;
     struct group_info *my_group_info;
     struct group_info *gi_from_cred_p = NULL;
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,32)
@@ -225,20 +224,6 @@ vnlayer_fsuid_save(
     my_group_info = get_current_groups();
 #endif
 
-    my_ngroups = my_group_info->ngroups;
-
-    /* The static init_groups is set with ngroups=0 and no nblocks array at all
-    ** (because the compiler optimizes away an array with no elements at the
-    ** end of a structure).  Thus, we have to be careful here (in case
-    ** init_groups was at the end of a page and blocks[0] was on the next,
-    ** unmapped, page) and in the code below (so as not to reference through a
-    ** NULL ptr).
-    */
-    if (my_ngroups == 0) {
-        my_groups = NULL;
-    } else {
-        my_groups = my_group_info->blocks[0];
-    }
     *save_p = NULL;             /* Assume failure. */
 
     if (MDKI_CR_GET_UID(cred) != MDKI_GET_CURRENT_FSUID() ||
@@ -251,7 +236,7 @@ vnlayer_fsuid_save(
             goto done;
         }
         for (i = 0; i < cred->cr_ngroups; i++) {
-            GROUP_AT(gi_from_cred_p, i) = cred->cr_groups[i];
+            GROUP_AT(gi_from_cred_p, i) = MDKI_GID_TO_KGID(cred->cr_groups[i]);
         }
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,32)
         save = KMEM_ALLOC(sizeof(*save), KM_SLEEP);
@@ -287,8 +272,8 @@ vnlayer_fsuid_save(
             abort_creds(tmp_cred);
             goto done;
         }
-        tmp_cred->fsuid = MDKI_CR_GET_UID(cred);
-        tmp_cred->fsgid = MDKI_CR_GET_GID(cred);
+        tmp_cred->fsuid = MDKI_UID_TO_KUID(MDKI_CR_GET_UID(cred));
+        tmp_cred->fsgid = MDKI_GID_TO_KGID(MDKI_CR_GET_GID(cred));
         const_cred = tmp_cred;
         *save_p = override_creds(const_cred);
         /* Decrement count on cred so that it will be freed by the restore */
@@ -358,17 +343,25 @@ vnlayer_bogus_vnop(void)
     printk("Cleartext accessed via vnode/vfs operation.\n");
     BUG();
 }
-
 typedef int (*ino_create_fn_t)(
     struct inode *,
     struct dentry *,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0)
+    umode_t,
+    bool
+#else
     int,
     struct nameidata *
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0) */
 );
 typedef struct dentry * (*ino_lookup_fn_t)(
     struct inode *,
     struct dentry *,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0)
+    unsigned int
+#else
     struct nameidata *
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0) */
 );
 typedef int (*ino_link_fn_t)(
     struct dentry *,
@@ -387,7 +380,11 @@ typedef int (*ino_symlink_fn_t)(
 typedef int (*ino_mkdir_fn_t)(
     struct inode *,
     struct dentry *,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0)
+    umode_t
+#else
     int
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0) */
 );
 typedef int (*ino_rmdir_fn_t)(
     struct inode *,
@@ -396,7 +393,11 @@ typedef int (*ino_rmdir_fn_t)(
 typedef int (*ino_mknod_fn_t)(
     struct inode *,
     struct dentry *,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0)
+    umode_t,
+#else
     int,
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0) */
     dev_t
 );
 typedef int (*ino_rename_fn_t)(
@@ -660,12 +661,17 @@ typedef int (*asop_invalidatepage_fn_t)(
     struct page *,
     unsigned long
 );
-#else
+#else /* LINUX_VERSION_CODE < KERNEL_VERSION(2,6,18) */
 typedef void (*asop_invalidatepage_fn_t)(
     struct page *,
+# if LINUX_VERSION_CODE >= KERNEL_VERSION(3,11,0)
+    unsigned int,
+    unsigned int
+# else /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,11,0) */
     unsigned long
+# endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,11,0) */
 );
-#endif
+#endif /* LINUX_VERSION_CODE < KERNEL_VERSION(2,6,18) */
 typedef ssize_t (*asop_direct_IO_fn_t)(
     int,
     struct kiocb *,
@@ -960,6 +966,10 @@ vnlayer_make_temp_fs_struct(void)
     struct fs_struct *new_fs;
     MDKI_FS_LOCK_R_VAR(seq);
 
+    if (current->fs == NULL) {
+        return NULL;
+    }
+
     new_fs = mdki_linux_kmalloc(sizeof(*new_fs), KM_SLEEP);
     if (new_fs == NULL)
         return(new_fs);
@@ -1060,13 +1070,14 @@ vnlayer_inode2dentry_internal_no_lock(
 )
 {
     struct dentry *found = NULL;
-    struct list_head *le;
     mdki_boolean_t want_connected = TRUE;
+    MDKI_IDENTRY_T *cursor,
+                   *helper;
 
-    if (!list_empty(&inode->i_dentry)) {
+    if (!MDKI_IDENTRY_LIST_EMPTY(inode)) {
       retry:
-        list_for_each(le, &inode->i_dentry) {
-            found = list_entry(le, struct dentry, d_alias);
+        MDKI_IDENTRY_FOR_EACH(cursor, helper, inode) { 
+            found = MDKI_IDENTRY_LIST_ENTRY(cursor);
             if (ops != NULL && ops != found->d_op) {
                 /* don't accept if it's not the right flavor ops */
                 found = NULL;
@@ -1206,7 +1217,9 @@ vnlayer_get_root_mnt(void)
 struct dentry *
 vnlayer_get_root_dentry(void)
 {
-    return(MDKI_FS_ROOTDENTRY(current->fs));
+    if (current->fs != NULL)
+        return(MDKI_FS_ROOTDENTRY(current->fs));
+    return NULL;
 }
 
 #ifdef MDKI_SET_PROC_RDIR
@@ -1286,4 +1299,4 @@ mdki_vsnprintf(
 {
     return vsnprintf(str, limit, fmt, ap);
 }
-static const char vnode_verid_mvfs_linux_utils_c[] = "$Id:  c05982ec.009911e3.8267.00:01:84:c3:8a:52 $";
+static const char vnode_verid_mvfs_linux_utils_c[] = "$Id:  c9d2d7d1.e2bd11e3.8cd7.00:11:25:27:c4:b4 $";

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2003, 2012 IBM Corporation.
+ * Copyright (C) 2003, 2014 IBM Corporation.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -53,7 +53,9 @@
 #include <linux/ctype.h>        /* For isdigit and toupper. */
 #include <asm/bitops.h>
 #include <asm/page.h>
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,4,0)
 #include <asm/system.h>
+#endif
 #include <linux/list.h>
 #include <linux/dcache.h>
 #include <linux/dirent.h>
@@ -82,4 +84,4 @@
 #include "mvfs_mdki.h"
 #include "mvfs_vnode.h"
 #include "mvfs_linux_only.h"
-/* $Id: a2330f58.b4c211e1.911f.00:01:84:c3:8a:52 $ */
+/* $Id: ca42d819.e2bd11e3.8cd7.00:11:25:27:c4:b4 $ */

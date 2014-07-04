@@ -264,7 +264,7 @@ mfs_clnt_getattr_mnp(
         ** mvfs_set_ac_timeout() that needs it.
         */
         mnp->mn_vob.lvut = rrp->lvut;
-        mvfs_attrcache(mnp, vfsp, &(rrp->vstat), FALSE, cd, TRUE);
+        mvfs_attrcache(mnp, vfsp, &(rrp->vstat), FALSE, cd);
 
         /* Fix up stats for a 'history mode' symlink.  The size returned does
         ** not include the hm suffix we will add, because the view_server
@@ -512,7 +512,7 @@ mvfs_clnt_setattr_locked(
 		      rrp->vstat.fstat.ctime.tv_usec, wcred));
         }
 #endif
-        mvfs_attrcache(mnp, vp->v_vfsp, &(rrp->vstat), 0, cd, TRUE);
+        mvfs_attrcache(mnp, vp->v_vfsp, &(rrp->vstat), 0, cd);
 
 	/* Clear bits if we have sync'd (or set) the mtime */
 	if (rap->sattr.mask != 0)
@@ -638,7 +638,7 @@ mfs_clnt_remove(
     if (!error) error = mfs_geterrno(rrp->hdr.status);
     if (!error) {
         mvfs_attrcache(mnp, dvp->v_vfsp, &(rrp->dir_mod.dvstat),
-                       rrp->dir_mod.dir_dtm_valid, cd, TRUE);
+                       rrp->dir_mod.dir_dtm_valid, cd);
         MVFS_CLNT_RDDIR_CACHE_CHECK(mnp, dvp, nm, dtm_save, "mvfs_clnt_remove");
     } else {
         MFS_CHK_STALE(error, dvp);
@@ -1030,7 +1030,7 @@ mfs_clnt_create(
     if (!error) error = mfs_geterrno(rrp->hdr.status);
     if (!error) {
         mvfs_attrcache(mnp, dvp->v_vfsp, &(rrp->dir_mod.dvstat),
-                       rrp->dir_mod.dir_dtm_valid, cd, TRUE);
+                       rrp->dir_mod.dir_dtm_valid, cd);
         MVFS_CLNT_RDDIR_CACHE_CHECK(mnp, dvp, nm, dtm_save, "mvfs_clnt_create");
         error = mvfs_makevobnode(&(rrp->vstat), 0, vw, &(rrp->fhandle),
                                  dvp->v_vfsp, cd, vpp, TRUE);
@@ -1106,7 +1106,7 @@ mfs_clnt_link(
     if (!error) error = mfs_geterrno(rrp->hdr.status);
     if (!error) {
         mvfs_attrcache(tdmnp, tdvp->v_vfsp, &(rrp->dir_mod.dvstat),
-                       rrp->dir_mod.dir_dtm_valid, cd, TRUE);
+                       rrp->dir_mod.dir_dtm_valid, cd);
         MVFS_CLNT_RDDIR_CACHE_CHECK(tdmnp, tdvp, tnm, dtm_save, "mvfs_clnt_link");
 
 	/* Link must be in view, and this is BH invariant */
@@ -1201,7 +1201,7 @@ mfs_clnt_rename(
     if (!error) error = mfs_geterrno(rrp->hdr.status);
     if (!error) {
         mvfs_attrcache(tdmnp, tdvp->v_vfsp, &(rrp->dir_mod.dvstat),
-                       rrp->dir_mod.dir_dtm_valid, cd, TRUE);
+                       rrp->dir_mod.dir_dtm_valid, cd);
         MVFS_CLNT_RDDIR_CACHE_CHECK(tdmnp, tdvp, tnm, tdtm_save,
                                     "mvfs_clnt_rename");
 
@@ -1286,7 +1286,7 @@ mfs_clnt_mkdir(
     if (!error) error = mfs_geterrno(rrp->hdr.status);
     if (!error) {
         mvfs_attrcache(mnp, dvp->v_vfsp, &(rrp->dir_mod.dvstat),
-                       rrp->dir_mod.dir_dtm_valid, cd, TRUE);
+                       rrp->dir_mod.dir_dtm_valid, cd);
         MVFS_CLNT_RDDIR_CACHE_CHECK(mnp, dvp, nm, dtm_save, "mvfs_clnt_mkdir");
         error = mvfs_makevobnode(&(rrp->vstat), 0, vw, &(rrp->fhandle),
                                  dvp->v_vfsp, cd, vpp, TRUE);
@@ -1352,7 +1352,7 @@ mfs_clnt_rmdir(
     if (!error) error = mfs_geterrno(rrp->hdr.status);
     if (!error) {
         mvfs_attrcache(mnp, dvp->v_vfsp, &(rrp->dir_mod.dvstat), 
-                       rrp->dir_mod.dir_dtm_valid, cd, TRUE);
+                       rrp->dir_mod.dir_dtm_valid, cd);
         MVFS_CLNT_RDDIR_CACHE_CHECK(mnp, dvp, nm, dtm_save, "mvfs_clnt_rmdir");
     } else {
         MFS_CHK_STALE(error, dvp);
@@ -1414,7 +1414,7 @@ mfs_clnt_symlink(
     if (!error) error = mfs_geterrno(rrp->hdr.status);
     if (!error) {
 	mvfs_attrcache(mnp, dvp->v_vfsp, &(rrp->dir_mod.dvstat),
-                       rrp->dir_mod.dir_dtm_valid, cd, TRUE);
+                       rrp->dir_mod.dir_dtm_valid, cd);
         MVFS_CLNT_RDDIR_CACHE_CHECK(mnp, dvp, tnm, dtm_save,
                                     "mvfs_clnt_symlink");
         error = mvfs_makevobnode(&(rrp->vstat), 0, vw, &(rrp->fhandle),
@@ -1750,7 +1750,6 @@ mfs_clnt_choid_locked(
 {
     VNODE_T *vw;
     mfs_mnode_t *mnp;
-    int update_attrs;
     HEAP_ALLOC_RPC_ARGS(view_change_oid);
 
     mnp = VTOM(vp);
@@ -1779,8 +1778,7 @@ mfs_clnt_choid_locked(
     if (!error) error = mfs_geterrno(rrp->hdr.status);
     if (!error) {
 	/* Cache new attributes */
-        update_attrs = TRUE;
-		mvfs_attrcache(mnp, vp->v_vfsp, &(rrp->vstat), 0, cd, update_attrs);
+		mvfs_attrcache(mnp, vp->v_vfsp, &(rrp->vstat), 0, cd);
 	/* NOTE: cleartext may have changed... higher layer must handle! */
 
     } else {
@@ -1935,7 +1933,7 @@ mfs_clnt_rebind_dir(
 	    VN_HOLD(*vpp);
 	    MLOCK(mnp);
             mvfs_attrcache(mnp, dvp->v_vfsp, &(rrp->vstat), FALSE,
-                           cd, TRUE);
+                           cd);
 	    MUNLOCK(mnp);
             error = 0;
             goto done;
@@ -2210,7 +2208,7 @@ mfs_clnt_change_mtype(
 
     if (!error && *statusp == TBS_ST_OK) {
 	/* Cache new attributes */
-		mvfs_attrcache(mnp, vp->v_vfsp, &(rrp->vstat), 0, cd, TRUE);
+		mvfs_attrcache(mnp, vp->v_vfsp, &(rrp->vstat), 0, cd);
     } else {
 	xerror = mfs_geterrno(rrp->hdr.status);
 	MFS_CHK_STALE(xerror, vp);
@@ -2342,4 +2340,4 @@ mvfs_clnt_get_eacl_mnp(
     *statusp = status;
     return(error);
 }
-static const char vnode_verid_mvfs_clnt_c[] = "$Id:  cd5559f0.7d4911e3.81b9.44:37:e6:71:2b:ed $";
+static const char vnode_verid_mvfs_clnt_c[] = "$Id:  d5a51817.64234059.beee.01:be:88:29:f8:2e $";

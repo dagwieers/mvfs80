@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 1999, 2012 IBM Corporation.
+ * Copyright (C) 1999, 2014 IBM Corporation.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -58,7 +58,11 @@ struct vnlayer_cvn_debug_info vnlayer_cvn_old_debug[HISTCOUNT] = {{0}};
 extern int
 vnode_shadow_dop_revalidate(
     DENT_T *dentry_p,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0)
+    unsigned int flags
+#else
     struct nameidata *nd
+#endif
 )
 {
     int err;
@@ -75,7 +79,11 @@ vnode_shadow_dop_revalidate(
         VNODE_DGET(real_dentry);
         err = TRUE;
         if (real_dentry->d_op && real_dentry->d_op->d_revalidate) {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0)
+            err = (*real_dentry->d_op->d_revalidate)(real_dentry, flags);
+#else
             err = (*real_dentry->d_op->d_revalidate)(real_dentry, nd);
+#endif
             /* Recreate what cached lookup would do to the real dentry.
              * Note that d_invalidate only returns non-zero if it is
              * called for a directory still in use.  We should never
@@ -163,7 +171,7 @@ vnode_shadow_fop_open(
     struct vfsmount *oldmnt, *newmnt;
     VNODE_T *cvp;
 
-    oldmnt = file->f_vfsmnt;
+    oldmnt = MDKI_FS_VFSMNT(file);
 
     oldent = file->f_dentry;
     ASSERT(D_COUNT(oldent));
@@ -220,7 +228,7 @@ vnode_shadow_fop_open(
     VNLAYER_RA_STATE_INIT(&(file->f_ra), file->f_mapping);
     file->f_dentry = VNODE_DGET(rdentry);
     oldfops = file->f_op;
-    file->f_vfsmnt = newmnt;
+    MDKI_FS_SET_VFSMNT(file, newmnt);
     file->f_op = fops_get(real_inode->i_fop);
     if (real_inode->i_fop && !file->f_op)
         /* If we failed to get the reference to a non-NULL op, bail out */
@@ -253,8 +261,8 @@ vnode_shadow_fop_open(
             VNODE_DPUT(file->f_dentry);
         if (file->f_op)
             fops_put(file->f_op);
-        MDKI_MNTPUT(file->f_vfsmnt);
-        file->f_vfsmnt = oldmnt;
+        MDKI_MNTPUT(MDKI_FS_VFSMNT(file));
+        MDKI_FS_SET_VFSMNT(file, oldmnt);
         file->f_dentry = oldent;
         file->f_op = oldfops;
     } else {
@@ -510,7 +518,7 @@ vnode_shadow_iop_getattr(
     } else {
         VNODE_DGET(rdentry);                 /* protect inode */
         if (rdentry != NULL && rdentry->d_inode != NULL) {
-            err = vfs_getattr(CVN_TO_VFSMNT(cvp), rdentry, kstat);
+            err = MDKI_VFS_GET_ATTR(CVN_TO_VFSMNT(cvp), rdentry, kstat);
             if (err == 0) {
                 SHADOW_CP_INODAT(dentry->d_inode, rdentry->d_inode);
             }
@@ -632,4 +640,4 @@ IN_OPS_T vnode_shadow_slink_inode_ops = {
     .removexattr =      &vnode_shadow_iop_removexattr,
 };
 
-static const char vnode_verid_mvfs_linux_shadow_c[] = "$Id:  6c2267b8.d02e11e1.95d1.00:01:84:c3:8a:52 $";
+static const char vnode_verid_mvfs_linux_shadow_c[] = "$Id:  c972d7a1.e2bd11e3.8cd7.00:11:25:27:c4:b4 $";

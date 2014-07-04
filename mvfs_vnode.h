@@ -1,7 +1,7 @@
 #ifndef _MVFS_VNODE_H_
 #define _MVFS_VNODE_H_
 /*
- * Copyright (C) 1994, 2013 IBM Corporation.
+ * Copyright (C) 1994, 2014 IBM Corporation.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -249,7 +249,10 @@ typedef struct symlink_ctx {
     int done;
 } symlink_ctx;
 typedef struct lookup_ctx {
-    int flags;
+    int internal_flags;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0)
+    unsigned int kernel_flags;
+#endif
 #define LOOKUP_CTX_VALID        (1 << 0)
     void *dentrypp;
 } lookup_ctx;
@@ -549,4 +552,4 @@ mvop_linux_close(
     file_ctx *ctx
 );
 #endif /* _MVFS_VNODE_H_ */
-/* $Id: 92a555fa.46fd11e3.8592.00:01:84:c3:8a:52 $ */
+/* $Id: ca22d801.e2bd11e3.8cd7.00:11:25:27:c4:b4 $ */

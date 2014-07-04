@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 1999, 2012 IBM Corporation.
+ * Copyright (C) 1999, 2014 IBM Corporation.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -179,6 +179,8 @@ mdki_linux_clntkudp_init(
     rpc_cl->cl_timeout.to_retries = retries;
     /* credentials will be handled in clnt_call */
     rpc_cl->cl_intr = intr;
+#else
+    rpc_cl->cl_timeout_default.to_retries = retries;
 #endif
 
     MDKI_TRACE(TRACE_RPC, "clntkudp_init %p ntries %d intr %d\n",
@@ -234,6 +236,10 @@ mdki_linux_clnt_call(
     rpc_cl->cl_timeout.to_maxval = 20*HZ; /* like Solaris kudp */
     rpc_cl->cl_timeout.to_exponential = 1;
     /* to_retries is set in mdki_linux_clntkudp_init() */
+#else
+    rpc_cl->cl_timeout_default.to_initval = rpctimeout * HZ / 10;
+    rpc_cl->cl_timeout_default.to_maxval = 20*HZ; /* like Solaris kudp */
+    rpc_cl->cl_timeout_default.to_exponential = 1;
 #endif
 
     ASSERT(rpc_cl->cl_procinfo[procnum].p_encode != NULL);
@@ -336,4 +342,4 @@ mdki_linux_destroy_client(CLIENT *cl)
 #endif
 }
 
-static const char vnode_verid_mvfs_linux_rpcglue_c[] = "$Id:  1469f47f.0c1f11e2.93ec.00:01:83:9c:f6:11 $";
+static const char vnode_verid_mvfs_linux_rpcglue_c[] = "$Id:  c952d789.e2bd11e3.8cd7.00:11:25:27:c4:b4 $";

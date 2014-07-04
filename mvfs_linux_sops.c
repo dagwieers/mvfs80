@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 1999, 2013 IBM Corporation.
+ * Copyright (C) 1999, 2014 IBM Corporation.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -34,8 +34,17 @@
 
 void
 vnlayer_put_super(SUPER_T *super_p);
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,6,0)
 void
 vnlayer_write_super(SUPER_T *super_p);
+#else /* LINUX_VERSION_CODE < KERNEL_VERSION(3,6,0) */
+int
+vnlayer_sync_super(
+    struct super_block *super_p, 
+    int wait
+);
+#endif /* LINUX_VERSION_CODE < KERNEL_VERSION(3,6,0) */
+
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,18) && !defined(SLES10SP2)
 int
 vnlayer_linux_statfs(
@@ -80,6 +89,15 @@ vnlayer_fill_super(
     int silent
 );
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
+int
+vnlayer_inode_to_fh(
+    struct inode *inode,
+    __u32 *fh,
+    int *lenp,
+    struct inode *parent
+);
+#else
 int
 vnlayer_dentry_to_fh(
     struct dentry *dent,
@@ -87,6 +105,7 @@ vnlayer_dentry_to_fh(
     int *lenp,
     int need_parent
 );
+#endif
 
 struct dentry *
 vnlayer_get_dentry(
@@ -124,7 +143,11 @@ struct dentry *
 vnlayer_get_parent(struct dentry *child);
 
 static struct export_operations vnlayer_export_ops = {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
+    .encode_fh = &vnlayer_inode_to_fh,
+#else
     .encode_fh = &vnlayer_dentry_to_fh,
+#endif
     .get_parent = &vnlayer_get_parent,
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,24)
     .decode_fh = &vnlayer_decode_fh,
@@ -177,7 +200,11 @@ SB_OPS_T mvfs_super_ops = {
         /* No put_inode.  The work is done now in clear_inode */
         /* no delete_inode (even before 2.6.36) */
         .put_super =     &vnlayer_put_super,
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,6,0)
         .write_super =   &vnlayer_write_super,
+#else
+	.sync_fs = &vnlayer_sync_super,
+#endif
         .statfs =        &vnlayer_linux_statfs,
         .remount_fs =    &vnlayer_remount_fs,
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,36)
@@ -200,7 +227,12 @@ SB_OPS_T mvfs_super_ops = {
 struct file_system_type mvfs_file_system =
    {
      .name =       "mvfs",
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,9,0)
+     /* weak_revalidate is not implemented */
+     .fs_flags =   FS_REQUIRES_DEV | FS_BINARY_MOUNTDATA,
+#else
      .fs_flags =   FS_REQUIRES_DEV | FS_BINARY_MOUNTDATA | FS_REVAL_DOT,
+#endif
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,39)
      .get_sb   =   &vnlayer_get_sb,
 #else
@@ -230,6 +262,7 @@ vnlayer_put_super(struct super_block *super_p)
     return /* mdki_errno_unix_to_linux(err)*/;
 }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,6,0)
 void
 vnlayer_write_super(struct super_block *super_p)
 {
@@ -250,6 +283,31 @@ vnlayer_write_super(struct super_block *super_p)
                 __func__, err);
     return /* mdki_errno_unix_to_linux(err) */;
 }
+#else /* LINUX_VERSION_CODE < KERNEL_VERSION(3,6,0) */
+int
+vnlayer_sync_super(
+    struct super_block *super_p, 
+    int wait
+)
+{
+    CALL_DATA_T cd;
+    int err;
+
+    /* if wait is not allowed, do nothing */
+    if (wait == 0) {
+        return 0;
+    }
+    ASSERT_SB_LOCKED(super_p);
+    mdki_linux_init_call_data(&cd);
+    err = VFS_SYNC(SBTOVFS(super_p), SBTOVFS(super_p), 0, &cd);
+    mdki_linux_destroy_call_data(&cd);
+    if (err != 0) {
+        VFS_LOG(SBTOVFS(super_p), VFS_LOG_ERR, "%s: error %d syncing\n",
+                __func__, err);
+    }
+    return mdki_errno_unix_to_linux(err);
+}
+#endif /* LINUX_VERSION_CODE < KERNEL_VERSION(3,6,0) */
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,18) && !defined(SLES10SP2)
 int
@@ -333,14 +391,34 @@ mvfs_evict_inode(struct inode *inode_p)
 {
     mvfs_clear_inode(inode_p);
     truncate_inode_pages(&inode_p->i_data, 0);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
+    clear_inode(inode_p);
+#else
     end_writeback(inode_p);
+#endif
 }
 #endif
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,38)
-#include <linux/lglock.h>
-DECLARE_LGLOCK(vfsmount_lock);
-#endif
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,38)
+# define MDKI_READ_MNT_COUNT(mnt) atomic_read(&(mnt)->mnt_count);
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(3,3,0)
+# include <linux/lglock.h>
+  DECLARE_LGLOCK(vfsmount_lock);
+
+# ifdef CONFIG_SMP
+#   define MDKI_READ_MNT_COUNT(mnt) ({\
+        int cpu;\
+        int count = 0;\
+        br_read_lock(vfsmount_lock);\
+        for_each_possible_cpu(cpu) {\
+          count += per_cpu_ptr((mnt)->mnt_pcp, cpu)->mnt_count;\
+        }\
+        br_read_unlock(vfsmount_lock);\
+        count;})
+# else /* CONFIG_SMP */
+#   define MDKI_READ_MNT_COUNT(mnt) ((mnt)->mnt_count)
+# endif /* else CONFIG_SMP */
+#endif /* LINUX_VERSION_CODE < KERNEL_VERSION(3,3,0) */
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,18) || \
     LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,27)
@@ -365,9 +443,8 @@ mvfs_linux_umount_begin(
      */
     SUPER_T *super_p = mnt->mnt_sb;
 #endif
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,3,0)
     int mount_count = 0;
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,38)) && defined(CONFIG_SMP)
-    int cpu;
 #endif
 
     ASSERT(super_p != NULL);
@@ -399,23 +476,26 @@ mvfs_linux_umount_begin(
         MDKI_VFS_LOG(VFS_LOG_ERR, "%s: mnt is NULL\n", __FUNCTION__);
         return;
     }
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,38)
-    mount_count = atomic_read(&mnt->mnt_count);
-#else
-# ifdef CONFIG_SMP
-    br_read_lock(vfsmount_lock);
-    for_each_possible_cpu(cpu) {
-        mount_count += per_cpu_ptr(mnt->mnt_pcp, cpu)->mnt_count;
-    }
-    br_read_unlock(vfsmount_lock);
-# else /* CONFIG_SMP */
-    mount_count = mnt->mnt_count;
-# endif /* else CONFIG_SMP */
-#endif /* else < KERNEL_VERSION(2,6,38) */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,3,0)
+    mount_count = MDKI_READ_MNT_COUNT(mnt);
     if (mount_count == 3) {
         MDKI_MNTPUT(mnt);
         SET_VTOVFSMNT(vp, NULL);
     }
+#else
+    /*
+     * may_umount returns !0 when the ref counter is 2 (and other conditions).
+     * We took an extra ref, I'll drop it to test may_umount. If it is not
+     * ready to be unmounted, the put is reverted.
+     */
+    MDKI_MNTPUT(mnt);
+    if (may_umount(mnt)) {
+        SET_VTOVFSMNT(vp, NULL);
+    } else {
+        /* not ready yet */
+        MDKI_MNTGET(mnt);
+    }
+#endif /* LINUX_VERSION_CODE < KERNEL_VERSION(3,3,0) */
 }
 
 /* vnlayer_linux_mount
@@ -590,8 +670,11 @@ vnlayer_fill_super(
         goto bailout;
     }
     mdki_linux_destroy_call_data(&cd);
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,6,0)
     super_p->s_dirt = 1;            /* we want to be called on
                                        write_super/sync() */
+#endif /* LINUX_VERSION_CODE < KERNEL_VERSION(3,6,0) */
+
 #if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,38)
     /* write back is delegated to the undelying fs */
     super_p->s_bdi = &noop_backing_dev_info;
@@ -706,7 +789,11 @@ vnlayer_mount(
     SUPER_T *sb;
     int err;
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0)
+    sb = sget(fs_type, NULL, vnlayer_set_sb, flags, data);
+#else
     sb = sget(fs_type, NULL, vnlayer_set_sb, data);
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0) */
     if (IS_ERR(sb)) {
         return (struct dentry *)(sb);
     }
@@ -759,7 +846,11 @@ vnlayer_destroy_inode_callback(struct rcu_head *head)
 {
     struct inode *inode_p = container_of(head, struct inode, i_rcu);
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0)
+    INIT_HLIST_HEAD(&inode_p->i_dentry);
+#else
     INIT_LIST_HEAD(&inode_p->i_dentry);
+#endif
     ASSERT(I_COUNT(inode_p) == 0);
     ASSERT(inode_p->i_state & I_FREEING);
     kmem_cache_free(vnlayer_vnode_cache, (vnlayer_vnode_t *) ITOV(inode_p));
@@ -784,7 +875,7 @@ vnlayer_destroy_inode(INODE_T *inode)
 /*
  * NFS access to vnode file systems.
  *
- * We provide dentry_to_fh() and fh_to_dentry() methods so that the
+ * We provide dentry/inode_to_fh() and fh_to_dentry() methods so that the
  * vnode-based file system can hook up its VOP_FID() and VFS_VGET()
  * methods.  The Linux NFS server calls these methods when encoding an
  * object into a file handle to be passed to the client for future
@@ -813,6 +904,15 @@ vnlayer_destroy_inode(INODE_T *inode)
  * dentry and use it, or fabricate a new one which NFS will attempt to
  * reconnect to the namespace.
  */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
+int
+vnlayer_inode_to_fh(
+    struct inode *inode,
+    __u32 *fh,
+    int *lenp,
+    struct inode *parent
+)
+#else /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0) */
 int
 vnlayer_dentry_to_fh(
     struct dentry *dent,
@@ -820,6 +920,7 @@ vnlayer_dentry_to_fh(
     int *lenp,
     int need_parent
 )
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0) */
 {
     int error;
     int type;
@@ -829,6 +930,10 @@ vnlayer_dentry_to_fh(
     mdki_boolean_t bailout_needed = TRUE; /* Assume we'll fail. */
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,27)
     SUPER_T *sbp;
+#endif
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,5,0)
+    struct inode *inode = dent->d_inode;
+    struct inode *parent = dent->d_parent->d_inode;
 #endif
 
     /*
@@ -844,18 +949,35 @@ vnlayer_dentry_to_fh(
      * 10-byte vnode FIDs into the NFS v2 file handle.  The NFS v3 handle has
      * plenty of room.
      */
-    ASSERT(ITOV(dent->d_inode));
-    error = VOP_FID(ITOV(dent->d_inode), &lfidp);
+    ASSERT(ITOV(inode));
+    error = VOP_FID(ITOV(inode), &lfidp);
     if (error != 0) {
         ASSERT(lfidp == NULL);
         goto bailout;
     }
 
-    ASSERT(ITOV(dent->d_parent->d_inode));
-    error = VOP_FID(ITOV(dent->d_parent->d_inode), &parent_fidp);
-    if (error != 0) {
-        ASSERT(parent_fidp == NULL);
-        goto bailout;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
+    /* we may be called with a NULL parent */
+    if (parent == NULL) {
+        /* in this case, fabricate a fake parent */
+        parent_fidp = (MDKI_FID_T *) KMEM_ALLOC(MDKI_FID_LEN(lfidp),
+                                                KM_SLEEP);
+        if (parent_fidp == NULL) {
+            MDKI_VFS_LOG(VFS_LOG_ERR, "%s: can't allocate %d bytes\n",
+                         __func__,
+                         (int) MDKI_FID_LEN(lfidp));
+            goto bailout;
+        }
+        memset(parent_fidp, 0xff, MDKI_FID_LEN(lfidp));
+        parent_fidp->fid_len = lfidp->fid_len;
+    } else
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0) */
+    {
+        error = VOP_FID(ITOV(parent), &parent_fidp);
+        if (error != 0) {
+            ASSERT(parent_fidp == NULL);
+            goto bailout;
+        }
     }
 
     /*
@@ -910,14 +1032,14 @@ vnlayer_dentry_to_fh(
      * For 64 bits OS, use a 32 bits hash of the SB pointer.
      * For 32 bits OS, use the pointer itself.
      */
-    if (ITOV(dent->d_inode) == NULL || 
-        ITOV(dent->d_inode)->v_vfsmnt == NULL) {
+    if (ITOV(inode) == NULL || 
+        ITOV(inode)->v_vfsmnt == NULL) {
         MDKI_VFS_LOG(VFS_LOG_ESTALE,
                      "%s: %p is this a MVFS inode?\n",
-                     __func__, dent->d_inode);
+                     __func__, inode);
         goto bailout;
     } else {
-        sbp = ((struct vfsmount *)ITOV(dent->d_inode)->v_vfsmnt)->mnt_sb;
+        sbp = ((struct vfsmount *)ITOV(inode)->v_vfsmnt)->mnt_sb;
     }
     MDKI_FID_SET_SB_HASH(fh, type / 2, MDKI_FID_CALC_HASH(sbp));
 #endif
@@ -1063,7 +1185,7 @@ vnlayer_eval_mount(
 {
     SUPER_T *sb = VFSTOSB(vfsp);
     if(MDKI_FID_CALC_HASH(sb) == *(unsigned *)data) {
-        lock_super(sb);
+        MDKI_LOCK_SB(sb);
         return sb;
     }
     return NULL;
@@ -1115,7 +1237,7 @@ vnlayer_decode_fh(
         /*
          * Search in the VOB mount list for the super_block we encoded.
          * If the result is not NULL, the superblock was locked with
-         * lock_super and should be unlocked.
+         * MDKI_LOCK_SB and must be unlocked with MDKI_UNLOCK_SB.
          */
         realsb = (SUPER_T *) mvfs_find_mount(vnlayer_eval_mount,
                                              &realsb_hash);
@@ -1127,7 +1249,7 @@ vnlayer_decode_fh(
              * it should be able to smell any staleness.
              */
             dp = vnlayer_get_dentry(realsb, lfidp);
-            unlock_super(realsb);
+            MDKI_UNLOCK_SB(realsb);
             if (IS_ERR(dp)) {
                 MDKI_VFS_LOG(VFS_LOG_ESTALE,
                     "%s: pid %d vnlayer_get_dentry returned error %ld\n",
@@ -1172,15 +1294,13 @@ vnlayer_get_parent(struct dentry *child)
 {
     VNODE_T *parentvp;
     struct dentry *rdentp;
-    struct lookup_ctx ctx;
+    struct lookup_ctx ctx = {0};
     CALL_DATA_T cd;
     int err;
 
     if (!MDKI_INOISMVFS(child->d_inode))
         return ERR_PTR(-ESTALE);
 
-    ctx.flags = 0;
-    ctx.dentrypp = NULL;
     mdki_linux_init_call_data(&cd);
 
     err = VOP_LOOKUP(ITOV(child->d_inode), "..", &parentvp, NULL,
@@ -1304,7 +1424,11 @@ vnlayer_find_dentry(VNODE_T *vp)
             /* it is not clear if it needs DCACHE_RCUACCESS */
             dnew->d_flags |= NFSD_DCACHE_DISCON;
 #endif /* else LINUX_VERSION_CODE < KERNEL_VERSION(3,0,0) */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0)
+            hlist_add_head(&dnew->d_alias, &ip->i_dentry);
+#else
             list_add(&dnew->d_alias, &ip->i_dentry);
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0) */
 #if LINUX_VERSION_CODE < KERNEL_VERSION(3,0,0)
             hlist_add_head(&dnew->d_hash, &ip->i_sb->s_anon);
 #else /* LINUX_VERSION_CODE < KERNEL_VERSION(3,0,0) */
@@ -1328,4 +1452,4 @@ vnlayer_find_dentry(VNODE_T *vp)
     return dp;
 }
 
-static const char vnode_verid_mvfs_linux_sops_c[] = "$Id:  921555ca.46fd11e3.8592.00:01:84:c3:8a:52 $";
+static const char vnode_verid_mvfs_linux_sops_c[] = "$Id:  c9a2d7b9.e2bd11e3.8cd7.00:11:25:27:c4:b4 $";
